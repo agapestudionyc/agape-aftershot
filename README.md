@@ -208,6 +208,13 @@ Every command is a dry run until you add `--apply`.
 Defaults such as the similarity and blur thresholds were calibrated on one
 photographer's frames. Expect to tune them for your own.
 
+## Open source
+
+Agape Aftershot is free to use, change and share under the [MIT license](LICENSE).
+If you improve it, send it back: see [CONTRIBUTING.md](CONTRIBUTING.md).
+Reports of how it behaves with other cameras and RAW formats are especially
+welcome - open an [issue](https://github.com/agapestudionyc/agape-aftershot/issues).
+
 ## Status
 
 This is one photographer's working tool, shared as it is. It is used daily on
