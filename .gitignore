@@ -1,0 +1,18 @@
+# Compiled Python
+__pycache__/
+*.pyc
+
+# Half-written files
+*.part
+
+# Per-shoot caches
+_cullkit/
+
+# Your own music stays yours
+cullkit/web/audio/*
+!cullkit/web/audio/README.md
+audio/
+
+# Local tooling
+.claude/
+.aftershot-public

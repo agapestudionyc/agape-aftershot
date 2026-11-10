@@ -1,0 +1,429 @@
+/* Files - the explorer. Its own sheet, loaded by index.html, written against
+   the same variables as everything else so it changes rooms with the app.
+
+   Everything that floats (the menu, quick look, the dialogs) is appended to
+   <body> by files.js rather than living inside #v-files. A screen is animated
+   with a transform as it arrives, and a transform on an ancestor re-anchors
+   any position:fixed child to it. */
+#v-files{--fx-side:212px}
+.fx{display:grid;grid-template-columns:var(--fx-side) minmax(0,1fr);gap:14px;
+  height:calc(100dvh - 150px);min-height:420px}
+.fx-side{display:flex;flex-direction:column;gap:2px;padding:10px;overflow:auto;
+  border-radius:16px;border:1px solid color-mix(in srgb,var(--ink) 9%,transparent);
+  background:linear-gradient(180deg,color-mix(in srgb,var(--card) 94%,#fff 6%),var(--card) 46%);
+  box-shadow:var(--lift)}
+.fx-h{font:500 10px/1 "IBM Plex Mono",monospace;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink-3);padding:14px 8px 7px}
+.fx-place{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;
+  gap:9px;row-gap:5px;width:100%;padding:9px 9px;border:1px solid transparent;border-radius:10px;
+  background:none;color:var(--ink-2);cursor:pointer;text-align:left;
+  font:500 13px/1.2 "IBM Plex Sans",sans-serif;
+  transition:background-color .15s ease,color .15s ease,transform .2s var(--e-out)}
+.fx-place span:not(.fx-meter){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fx-place .fx-meter{grid-column:2}
+.fx-place:hover{background:var(--sunk);color:var(--ink)}
+.fx-place.on{background:color-mix(in srgb,var(--room) 14%,transparent);color:var(--ink);
+  border-color:color-mix(in srgb,var(--room) 40%,transparent)}
+.fx-place.on svg{color:var(--room)}
+.fx-meter{display:block;height:3px;border-radius:2px;background:var(--rule);overflow:hidden}
+.fx-meter i{display:block;height:100%;background:var(--ink-3);border-radius:2px}
+.fx-meter.full i{background:var(--reject)}
+
+.fx-main{display:flex;flex-direction:column;min-width:0;min-height:0;
+  border-radius:16px;border:1px solid color-mix(in srgb,var(--ink) 9%,transparent);
+  background:linear-gradient(180deg,color-mix(in srgb,var(--card) 94%,#fff 6%),var(--card) 30%);
+  box-shadow:var(--lift);overflow:hidden}
+.fx-bar{display:flex;align-items:center;gap:5px;padding:9px;
+  border-bottom:1px solid var(--rule)}
+.fx-btn{display:grid;place-items:center;flex:none;width:36px;height:36px;padding:0;
+  border-radius:10px;border:1px solid transparent;background:none;color:var(--ink-2);cursor:pointer;
+  transition:background-color .15s ease,color .15s ease,transform .18s var(--e-out)}
+.fx-btn:hover:not(:disabled){background:var(--sunk);color:var(--ink);border-color:var(--rule-2)}
+:root.motion .fx-btn:active:not(:disabled){transform:scale(.88)}
+.fx-btn:disabled{opacity:.3;cursor:default}
+.fx-crumb{flex:1;min-width:0;display:flex;align-items:center;gap:1px;overflow-x:auto;
+  scrollbar-width:none;padding:3px 6px;border-radius:10px;background:var(--sunk);
+  border:1px solid var(--rule);height:36px}
+.fx-crumb::-webkit-scrollbar{display:none}
+.fx-crumb button{flex:none;border:none;background:none;color:var(--ink-2);cursor:pointer;
+  padding:5px 7px;border-radius:7px;font:500 13px/1 "IBM Plex Sans",sans-serif;white-space:nowrap}
+.fx-crumb button:hover{background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--ink)}
+.fx-crumb button.here{color:var(--ink);font-weight:600}
+.fx-crumb i{font-style:normal;color:var(--ink-3);flex:none}
+.fx-q{flex:0 1 190px;min-width:90px;height:36px;padding:0 12px;border-radius:10px;
+  border:1px solid var(--rule);background:var(--sunk);color:var(--ink);
+  font:400 13px "IBM Plex Sans",sans-serif}
+.fx-q:focus{outline:none;border-color:var(--room)}
+.fx-status{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:7px 14px;
+  border-bottom:1px solid var(--rule);min-height:34px;
+  font:400 12px/1.3 "IBM Plex Mono",monospace;color:var(--ink-3)}
+.fx-link{border:none;background:color-mix(in srgb,var(--room) 14%,transparent);color:var(--room);
+  cursor:pointer;padding:5px 10px;border-radius:999px;font:600 11.5px/1 "IBM Plex Sans",sans-serif}
+.fx-link.quiet{background:none;color:var(--ink-3);padding:5px 2px}
+.fx-link:disabled{opacity:.4}
+
+.fx-list{flex:1;min-height:0;overflow:auto;padding:12px;outline:none;position:relative;
+  overscroll-behavior:contain;transition:opacity .2s ease}
+.fx-list.loading{opacity:.45}
+.fx-list.drop,.drop{outline:2px dashed var(--room);outline-offset:-4px}
+.fx-list.grid{display:grid;gap:6px;align-content:start;
+  grid-template-columns:repeat(auto-fill,minmax(118px,1fr))}
+.fx-list.grid .fx-home,.fx-list.grid .fx-empty{grid-column:1/-1}
+.fx-item{position:relative;border:1px solid transparent;border-radius:12px;cursor:default;
+  user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;
+  transition:background-color .12s ease,border-color .12s ease,transform .2s var(--e-out)}
+.fx-item:hover{background:color-mix(in srgb,var(--ink) 6%,transparent)}
+.fx-item.sel{background:color-mix(in srgb,var(--room) 15%,transparent);
+  border-color:color-mix(in srgb,var(--room) 55%,transparent)}
+.fx-item.cut{opacity:.42}
+.fx-item.dim .fx-pic,.fx-item.dim .fx-name{opacity:.55}
+:root.motion .fx-item{animation:fxIn .3s var(--e-out) backwards}
+@keyframes fxIn{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:none}}
+.fx-pic{position:relative;display:grid;place-items:center;color:var(--ink-3);overflow:hidden}
+.fx-item.dir .fx-pic{color:var(--room)}
+.fx-pic img{width:100%;height:100%;object-fit:cover;display:block;opacity:0;
+  transition:opacity .3s ease}
+.fx-pic img.in{opacity:1}
+.fx-pic b{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);
+  font:600 8.5px/1 "IBM Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase;
+  padding:3px 5px;border-radius:4px;background:var(--sunk);color:var(--ink-2);
+  border:1px solid var(--rule-2);max-width:90%;overflow:hidden;text-overflow:ellipsis}
+.fx-tick{position:absolute;top:6px;left:6px;width:22px;height:22px;border-radius:50%;
+  display:grid;place-items:center;color:transparent;cursor:pointer;opacity:0;
+  background:color-mix(in srgb,var(--card) 80%,transparent);border:1.5px solid var(--ink-3);
+  transition:opacity .15s ease,background-color .15s ease,transform .2s var(--e-spring)}
+.fx-item:hover .fx-tick,.fx-list.picking .fx-tick,.fx-item.sel .fx-tick{opacity:1}
+.fx-item.sel .fx-tick{background:var(--room);border-color:var(--room);color:#0d0d0d;transform:scale(1.08)}
+.fx-name{font:400 12.5px/1.3 "IBM Plex Sans",sans-serif;color:var(--ink);overflow-wrap:anywhere}
+.fx-where{font:400 11px/1.3 "IBM Plex Mono",monospace;color:var(--ink-3);margin-top:2px}
+.fx-col{font:400 12px/1.2 "IBM Plex Mono",monospace;color:var(--ink-2);white-space:nowrap}
+
+/* grid */
+.fx-list.grid .fx-item{display:flex;flex-direction:column;gap:7px;padding:8px 8px 10px}
+.fx-list.grid .fx-pic{aspect-ratio:1;border-radius:9px;background:var(--sunk)}
+.fx-list.grid .fx-item.dir .fx-pic{background:color-mix(in srgb,var(--room) 7%,var(--sunk))}
+.fx-list.grid .fx-name{text-align:center;display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;overflow:hidden}
+/* list */
+.fx-list.list{padding:6px 8px}
+.fx-list.list .fx-item,.fx-head{display:grid;align-items:center;gap:12px;
+  grid-template-columns:38px minmax(0,1fr) 128px 64px 84px;padding:5px 8px}
+.fx-list.list .fx-pic{width:38px;height:38px;border-radius:8px;background:var(--sunk)}
+.fx-list.list .fx-pic svg{width:20px;height:20px}
+.fx-list.list .fx-pic b{display:none}
+.fx-list.list .fx-tick{top:8px;left:8px}
+.fx-list.list .fx-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fx-list.list .fx-col.size{text-align:right}
+.fx-head{position:sticky;top:-6px;z-index:2;padding-top:8px;padding-bottom:8px;
+  background:var(--card);border-bottom:1px solid var(--rule)}
+.fx-head .fx-col{border:none;background:none;cursor:pointer;text-align:left;padding:0;
+  font:600 10.5px/1 "IBM Plex Mono",monospace;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3)}
+.fx-head .fx-col.name{grid-column:1/3}
+.fx-head .fx-col.size{text-align:right}
+.fx-head .fx-col.on{color:var(--room)}
+.fx-empty{padding:60px 20px;text-align:center;color:var(--ink-3);font-size:14px}
+
+/* This PC */
+.fx-home .fx-h{padding-left:2px}
+.fx-tiles{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+.fx-tile{display:grid;grid-template-columns:42px minmax(0,1fr);column-gap:12px;row-gap:5px;
+  align-items:center;text-align:left;padding:14px;border-radius:14px;cursor:pointer;color:var(--ink);
+  border:1px solid color-mix(in srgb,var(--ink) 10%,transparent);background:var(--sunk);
+  font-family:"IBM Plex Sans",sans-serif;
+  transition:transform .25s var(--e-out),border-color .15s ease}
+.fx-tile:hover{border-color:var(--room);transform:translateY(-2px)}
+.fx-ti{grid-row:span 3;display:grid;place-items:center;width:42px;height:42px;border-radius:12px;
+  background:color-mix(in srgb,var(--room) 13%,transparent);color:var(--room)}
+.fx-tile b{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fx-tile small{font:400 11px/1.3 "IBM Plex Mono",monospace;color:var(--ink-3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* the bar that appears with a selection */
+.fx-actions{position:sticky;bottom:calc(86px + env(safe-area-inset-bottom,0px));z-index:9;
+  display:none;align-items:center;gap:6px;flex-wrap:wrap;width:max-content;max-width:100%;
+  margin:10px auto 0;padding:7px;border-radius:16px;
+  background:color-mix(in srgb,var(--card) 82%,transparent);
+  -webkit-backdrop-filter:blur(20px) saturate(160%);backdrop-filter:blur(20px) saturate(160%);
+  border:1px solid color-mix(in srgb,var(--ink) 14%,transparent);
+  box-shadow:0 14px 40px rgba(0,0,0,.5)}
+.fx-actions.on{display:flex}
+:root.motion .fx-actions.on{animation:riseIn .3s var(--e-out)}
+.fx-actions .act{min-height:38px;padding:8px 13px;font-size:12.5px}
+.fx-n{display:grid;place-items:center;min-width:30px;height:30px;padding:0 8px;border-radius:999px;
+  background:var(--room);color:#0d0d0d;font:700 13px/1 "IBM Plex Sans",sans-serif}
+@media (min-width:1001px){.fx-actions{bottom:14px}}
+
+/* floating things, all children of <body> */
+.fx-menu{position:fixed;z-index:80;min-width:210px;max-width:min(320px,92vw);padding:6px;
+  border-radius:14px;background:color-mix(in srgb,var(--card) 92%,transparent);
+  -webkit-backdrop-filter:blur(22px) saturate(160%);backdrop-filter:blur(22px) saturate(160%);
+  border:1px solid color-mix(in srgb,var(--ink) 14%,transparent);
+  box-shadow:0 18px 50px rgba(0,0,0,.55);max-height:86vh;overflow:auto}
+:root.motion .fx-menu{animation:fxMenu .16s var(--e-out)}
+@keyframes fxMenu{from{opacity:0;transform:scale(.96) translateY(-4px)}to{opacity:1;transform:none}}
+.fx-menu button{display:block;width:100%;text-align:left;padding:9px 11px;border:none;
+  border-radius:9px;background:none;color:var(--ink);cursor:pointer;
+  font:400 13.5px/1.2 "IBM Plex Sans",sans-serif}
+.fx-menu button:hover{background:color-mix(in srgb,var(--room) 16%,transparent)}
+.fx-menu button.danger{color:var(--reject)}
+.fx-menu button.red{color:#ff5240}
+.fx-menu button.on{color:var(--room);font-weight:600}
+.fx-menu hr{border:none;border-top:1px solid var(--rule);margin:5px 4px}
+@media (pointer:coarse){.fx-menu button{padding:13px 12px;font-size:14.5px}}
+
+.fx-veil{position:fixed;inset:0;z-index:85;display:grid;place-items:center;padding:20px;
+  background:rgba(4,4,4,.6);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.fx-sheet{width:min(420px,100%);padding:20px;border-radius:18px;background:var(--card);
+  border:1px solid color-mix(in srgb,var(--ink) 14%,transparent);box-shadow:0 30px 80px rgba(0,0,0,.6)}
+.fx-sheet.wide{width:min(560px,100%)}
+:root.motion .fx-sheet{animation:resultIn .3s var(--e-out)}
+.fx-sheet h3{margin:0 0 14px;font:800 20px/1.2 Archivo,sans-serif;letter-spacing:-.02em;
+  overflow-wrap:anywhere}
+.fx-sheet p{margin:0 0 16px;color:var(--ink-2);font-size:14px;line-height:1.55}
+.fx-sheet input{margin-bottom:16px}
+.fx-props{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 16px;margin-bottom:18px;
+  font-size:13.5px}
+.fx-props span{color:var(--ink-3)}
+.fx-props b{font-weight:500;overflow-wrap:anywhere}
+
+.fx-look{position:fixed;inset:0;z-index:82;display:flex;flex-direction:column;
+  background:rgba(6,6,6,.96);color:#eee}
+:root.motion .fx-look{animation:fxLook .22s var(--e-out)}
+@keyframes fxLook{from{opacity:0}to{opacity:1}}
+.fx-look-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:max(12px,env(safe-area-inset-top)) 14px 12px}
+.fx-look-bar b{font:600 14.5px/1.3 "IBM Plex Sans",sans-serif;overflow-wrap:anywhere}
+.fx-look-bar span{flex:1;font:400 11.5px/1.3 "IBM Plex Mono",monospace;color:#9a958c}
+.fx-look-bar .act{text-decoration:none;display:inline-flex;align-items:center;
+  color:#eee;border-color:#3a3a3a;background:transparent;min-height:38px;padding:8px 14px}
+.fx-look-stage{flex:1;min-height:0;display:grid;place-items:center;padding:0 12px 14px;overflow:auto}
+.fx-look-stage img,.fx-look-stage video{max-width:100%;max-height:100%;object-fit:contain;
+  border-radius:8px;background:#111}
+:root.motion .fx-look-stage img{animation:develop .4s var(--e-out)}
+.fx-look-stage iframe{width:100%;height:100%;border:none;border-radius:8px;background:#fff}
+.fx-look-stage pre{align-self:stretch;justify-self:stretch;margin:0;padding:16px;overflow:auto;
+  border-radius:10px;background:#111;color:#cfcac0;white-space:pre-wrap;word-break:break-word;
+  font:400 12.5px/1.55 "IBM Plex Mono",monospace}
+.fx-nolook{display:grid;justify-items:center;gap:12px;text-align:center;color:#9a958c;max-width:340px}
+.fx-nolook b{color:#eee;overflow-wrap:anywhere}
+.fx-look-nav{position:absolute;top:50%;margin-top:-28px;width:56px;height:56px;border-radius:50%;
+  border:none;background:rgba(255,255,255,.08);color:#fff;font-size:30px;line-height:1;cursor:pointer;
+  transition:background-color .15s ease,transform .2s var(--e-spring)}
+.fx-look-nav:hover{background:rgba(255,255,255,.18);transform:scale(1.08)}
+.fx-look-nav.l{left:14px}.fx-look-nav.r{right:14px}
+.fx-look-nav:disabled{opacity:.15;cursor:default}
+
+/* Files on Overview, where "Connected drives" used to be. The card carries
+   the room's blue itself, since Overview is not in that room. */
+.files-card{--room:var(--files);padding:0;overflow:hidden;
+  border-color:color-mix(in srgb,var(--files) 30%,var(--rule))}
+.files-door{display:flex;align-items:center;gap:14px;width:100%;text-align:left;cursor:pointer;
+  padding:18px;border:none;color:var(--ink);font-family:"IBM Plex Sans",sans-serif;
+  background:radial-gradient(120% 140% at 100% 0%,
+    color-mix(in srgb,var(--files) 20%,transparent),transparent 62%);
+  border-bottom:1px solid color-mix(in srgb,var(--files) 18%,var(--rule))}
+.files-door i{display:grid;place-items:center;width:50px;height:50px;border-radius:15px;flex:none;
+  background:var(--files);color:#0d0d0d;font-style:normal;
+  box-shadow:0 0 0 6px color-mix(in srgb,var(--files) 14%,transparent),
+             0 10px 28px color-mix(in srgb,var(--files) 36%,transparent)}
+.files-door b{display:block;font:800 22px/1.1 Archivo,sans-serif;letter-spacing:-.03em}
+.files-door span{display:block;font-size:13px;line-height:1.45;color:var(--ink-2);margin-top:4px}
+.files-door em{flex:none;font:600 12.5px/1 "IBM Plex Sans",sans-serif;font-style:normal;
+  padding:10px 15px;border-radius:999px;color:var(--files);
+  border:1px solid color-mix(in srgb,var(--files) 55%,transparent);
+  background:color-mix(in srgb,var(--files) 10%,transparent);
+  transition:background-color .2s ease,color .2s ease,transform .25s var(--e-spring)}
+.files-door:hover em{background:var(--files);color:#0d0d0d;transform:translateX(3px)}
+:root.motion .files-door:active{transform:scale(.99)}
+.files-sub{font:500 10px/1 "IBM Plex Mono",monospace;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink-3);padding:16px 18px 2px}
+.files-card #drives{padding:0 18px 8px}
+.files-card .drive{cursor:pointer;border-radius:10px;margin:0 -8px;padding-left:8px;padding-right:8px;
+  transition:background-color .15s ease,transform .2s var(--e-out)}
+.files-card .drive:hover{background:color-mix(in srgb,var(--files) 9%,transparent);transform:translateX(3px)}
+.files-card .letter{color:var(--files)}
+.files-card .bar i{background:var(--files);opacity:.75}
+.files-card #fs-browser{margin:0 18px 16px}
+
+.fx-btn span{display:none}
+/* While a picture is on its way the square is not empty, it is waiting. */
+@keyframes fxWait{0%{background-position:120% 0}100%{background-position:-120% 0}}
+.fx-pic:has(img:not(.in)){background-image:linear-gradient(100deg,transparent 30%,
+    color-mix(in srgb,var(--ink) 9%,transparent) 50%,transparent 70%);
+  background-size:220% 100%;background-repeat:no-repeat}
+:root.motion .fx-pic:has(img:not(.in)){animation:fxWait 1.3s linear infinite}
+
+/* On a computer Files has a seat in the sidebar, one click away from anywhere,
+   so the card on Overview says nothing the bar does not. It is the phone's
+   way in - there is no room for that seat in the pill - and only the phone
+   gets it. */
+@media (min-width:1001px){.files-card{display:none}}
+
+/* ---------- phone ---------- */
+@media (max-width:1000px){
+  .fx{grid-template-columns:1fr;height:auto;min-height:0;gap:10px}
+  .fx-side{flex-direction:row;padding:6px;gap:5px;overflow-x:auto;scrollbar-width:none;border-radius:14px}
+  .fx-side::-webkit-scrollbar{display:none}
+  .fx-side .fx-h{display:none}
+  .fx-place{width:auto;flex:none;grid-template-columns:18px auto;padding:9px 11px}
+  .fx-place .fx-meter{display:none}
+  .fx-main{overflow:visible}
+  .fx-list{overflow:visible;min-height:50vh;padding:10px}
+  .fx-bar{flex-wrap:wrap;position:sticky;top:0;z-index:6;border-radius:16px 16px 0 0;
+    background:color-mix(in srgb,var(--card) 88%,transparent);
+    -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px)}
+  .fx-crumb{order:5;flex:1 1 100%}
+  .fx-q{flex:1 1 auto;order:1}
+  .fx-btn{width:40px;height:40px}
+  #fx-fwd{display:none}
+  .fx-list.grid{grid-template-columns:repeat(auto-fill,minmax(98px,1fr));gap:4px}
+  .fx-list.list .fx-item,.fx-head{grid-template-columns:42px minmax(0,1fr) 70px;gap:10px}
+  .fx-list.list .fx-col.date,.fx-list.list .fx-col.type,
+  .fx-head .fx-col.date,.fx-head .fx-col.type{display:none}
+  .fx-list.list .fx-pic{width:42px;height:42px}
+  .fx-list.list .fx-item{padding:7px 8px}
+  .fx-head{top:0}
+  .fx-tick{opacity:0}
+  .fx-list.picking .fx-tick{opacity:1}
+  .fx-look-nav{display:none}
+  .fx-tiles{grid-template-columns:1fr}
+}
+
+/* an upload in flight */
+.fx-up{display:flex;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid var(--rule);
+  font:400 12px/1.3 "IBM Plex Mono",monospace;color:var(--ink-2)}
+.fx-up span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fx-up b{flex:0 0 34%;height:6px;border-radius:999px;background:var(--sunk);overflow:hidden;
+  border:1px solid var(--rule)}
+.fx-up i{display:block;height:100%;width:0;background:var(--room);border-radius:999px;
+  box-shadow:0 0 12px var(--room);transition:width .25s ease}
+.fx-media{display:grid;justify-items:center;gap:12px;max-width:100%;max-height:100%}
+.fx-media video{max-width:100%;max-height:calc(100dvh - 170px);border-radius:8px;background:#000}
+.fx-media audio{width:min(520px,86vw)}
+.fx-medianote{margin:0;font:400 12px/1.4 "IBM Plex Mono",monospace;color:#9a958c;text-align:center}
+
+/* ---------- phone, second pass ----------
+   He could not tell which arrow went where: the pill's back left Files while
+   the toolbar's back stepped through folders, two arrows an inch apart doing
+   different things. So on a phone there is one: the pill's, which now walks
+   back through folders and only leaves from the top. The toolbar keeps Up,
+   which is a different question, and says its name.
+
+   Top to bottom: where you can go (places), where you are (the path), what
+   you can do here (Up, search, Upload, view, more), then the files. */
+@media (max-width:1000px){
+  #fx-back,#fx-fwd,#fx-new,#fx-sort{display:none}
+  .fx-bar{gap:7px;padding:10px}
+  .fx-crumb{order:0;flex:1 1 100%;height:40px}
+  #fx-up{order:1} .fx-q{order:2;flex:1 1 90px;min-width:0;height:40px}
+  #fx-upload{order:3} #fx-view{order:4} #fx-more{order:5}
+  #fx-up,#fx-upload{width:auto;padding:0 12px 0 9px;gap:6px;display:flex;align-items:center;
+    border-color:var(--rule-2);color:var(--ink)}
+  #fx-up span,#fx-upload span{display:inline;font:600 12.5px/1 "IBM Plex Sans",sans-serif}
+  #fx-upload{background:color-mix(in srgb,var(--room) 14%,transparent);
+    border-color:color-mix(in srgb,var(--room) 50%,transparent);color:var(--room)}
+  .fx-status{padding:8px 12px}
+}
+@media (max-width:380px){#fx-upload span{display:none}#fx-upload{padding:0;width:40px;justify-content:center}}
+
+/* =====================================================================
+   Third pass - friendlier, and the drives first
+   =====================================================================
+   "Prioridad es ver los drives." Files opens on them, they are the biggest
+   thing on that screen, and from inside any folder they are one tap away in
+   the strip. Everything else got a name: the folder you are in is a title,
+   and the buttons that were bare icons say what they do. */
+.fx-title{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding:16px 16px 4px}
+.fx-title b{font:800 24px/1.1 Archivo,sans-serif;letter-spacing:-.03em;overflow-wrap:anywhere}
+.fx-title span{font:400 12px/1.3 "IBM Plex Mono",monospace;color:var(--ink-3)}
+.fx-root .fx-bar,.fx-root .fx-status{display:none}
+.fx-root .fx-title{padding-bottom:10px}
+.fx-hint{margin-left:auto;color:var(--ink-3);opacity:.8}
+
+/* a drive */
+.fx-drives{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
+.fx-drive{display:flex;flex-direction:column;gap:14px;text-align:left;cursor:pointer;
+  padding:18px;border-radius:18px;color:var(--ink);font-family:"IBM Plex Sans",sans-serif;
+  border:1px solid color-mix(in srgb,var(--room) 26%,var(--rule));
+  background:radial-gradient(130% 110% at 100% 0%,
+    color-mix(in srgb,var(--room) 16%,transparent),transparent 62%),var(--sunk);
+  transition:transform .25s var(--e-out),border-color .15s ease,box-shadow .25s ease}
+.fx-drive:hover{border-color:var(--room);transform:translateY(-3px);
+  box-shadow:0 16px 40px color-mix(in srgb,var(--room) 16%,transparent)}
+:root.motion .fx-drive:active{transform:scale(.985)}
+:root.motion .fx-drive{animation:ntRise .45s var(--e-out) backwards}
+:root.motion .fx-drive:nth-child(2){animation-delay:.05s}
+:root.motion .fx-drive:nth-child(3){animation-delay:.1s}
+:root.motion .fx-drive:nth-child(n+4){animation-delay:.15s}
+.fx-drive-top{display:flex;align-items:center;gap:13px}
+.fx-drive .fx-ti{grid-row:auto;width:50px;height:50px;border-radius:15px;flex:none;
+  background:var(--room);color:#0d0d0d;
+  box-shadow:0 8px 22px color-mix(in srgb,var(--room) 34%,transparent)}
+.fx-drive b{display:block;font:800 18px/1.15 Archivo,sans-serif;letter-spacing:-.02em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fx-drive small{display:block;font:400 12px/1.3 "IBM Plex Sans",sans-serif;color:var(--ink-3);margin-top:2px}
+.fx-drive em{flex:none;font:800 20px/1 Archivo,sans-serif;font-style:normal;color:var(--room);
+  letter-spacing:-.02em}
+.fx-drive.card .fx-ti{background:var(--accent)}
+.fx-drive.card em{color:var(--accent)}
+.fx-meter.big{height:9px;border-radius:999px;background:color-mix(in srgb,var(--ink) 9%,transparent)}
+.fx-meter.big i{border-radius:999px;background:linear-gradient(90deg,
+  color-mix(in srgb,var(--room) 60%,#000),var(--room));
+  box-shadow:0 0 12px color-mix(in srgb,var(--room) 50%,transparent)}
+.fx-drive.full .fx-meter.big i{background:var(--reject);box-shadow:0 0 12px var(--reject)}
+.fx-drive-foot{display:flex;justify-content:space-between;gap:10px;
+  font:400 12px/1.3 "IBM Plex Mono",monospace;color:var(--ink-3)}
+.fx-drive-foot span:first-child{color:var(--ink);font-weight:500}
+
+.fx-chips{display:flex;flex-wrap:wrap;gap:8px}
+.fx-chip{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:999px;
+  cursor:pointer;color:var(--ink);font:500 13.5px/1 "IBM Plex Sans",sans-serif;
+  border:1px solid var(--rule-2);background:var(--sunk);
+  transition:border-color .15s ease,transform .2s var(--e-out)}
+.fx-chip:hover{border-color:var(--room);transform:translateY(-2px)}
+.fx-chip svg{color:var(--room)}
+.fx-chip.star svg{color:var(--accent)}
+.fx-resume{display:flex;align-items:center;gap:10px;width:100%;text-align:left;cursor:pointer;
+  padding:12px 14px;margin-bottom:6px;border-radius:12px;color:var(--ink);
+  border:1px dashed color-mix(in srgb,var(--room) 45%,transparent);background:none;
+  font:600 13px/1.2 "IBM Plex Sans",sans-serif}
+.fx-resume svg{color:var(--room);flex:none}
+.fx-resume small{flex:1;min-width:0;text-align:right;font:400 11.5px/1.2 "IBM Plex Mono",monospace;
+  color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl}
+.fx-home .fx-h{padding:16px 2px 9px}
+.fx-home .fx-h:first-child{padding-top:2px}
+
+/* the side: a name, and what is under it */
+.fx-place{grid-template-columns:20px minmax(0,1fr)}
+.fx-place-t{display:block;min-width:0}
+.fx-place-t b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fx-place-t small{display:block;font:400 10.5px/1.3 "IBM Plex Mono",monospace;color:var(--ink-3);margin-top:1px}
+.fx-place.on .fx-place-t b{font-weight:600}
+
+/* buttons that say what they do, where there is room to */
+@media (min-width:1001px){
+  #fx-new,#fx-upload{width:auto;padding:0 12px 0 9px;gap:7px;display:flex;align-items:center;
+    border-color:var(--rule-2);color:var(--ink)}
+  #fx-new span,#fx-upload span{display:inline;font:600 12.5px/1 "IBM Plex Sans",sans-serif}
+  #fx-upload{background:color-mix(in srgb,var(--room) 14%,transparent);
+    border-color:color-mix(in srgb,var(--room) 50%,transparent);color:var(--room)}
+  .fx-list.grid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:8px}
+}
+.fx-list.grid .fx-name{font-size:13px}
+.fx-item.dir .fx-pic svg{width:46px;height:46px}
+.fx-list.list .fx-item.dir .fx-pic svg{width:22px;height:22px}
+
+@media (max-width:1000px){
+  .fx-title{padding:14px 12px 2px}
+  .fx-title b{font-size:22px}
+  .fx-drives{grid-template-columns:1fr;gap:10px}
+  .fx-drive{padding:16px}
+  .fx-place{grid-template-columns:18px auto;align-items:center}
+  .fx-place-t small{display:block}
+  .fx-side{padding:7px;gap:6px}
+  .fx-root .fx-side{display:none}          /* the drives are the screen; no need to list them twice */
+  .fx-hint{flex:1 1 100%;margin-left:0}
+  .fx-list.grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .fx-list.grid .fx-item{padding:6px 6px 9px}
+}

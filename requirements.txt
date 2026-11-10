@@ -1,0 +1,10 @@
+pillow>=10
+numpy>=1.26
+scikit-learn>=1.4
+opencv-python>=4.9
+onnxruntime>=1.17
+insightface>=0.7
+cryptography>=42
+certifi>=2024
+# Optional: search YouTube Music from the Vibes panel
+# ytmusicapi>=1.8
