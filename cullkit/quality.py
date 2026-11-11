@@ -46,6 +46,9 @@ class Score:
     blur_ratio: float = float("nan")  # sharpness / shoot median
     focus: tuple = (0.5, 0.5)  # where the judged sharpness was measured, 0-1
     reasons: list = field(default_factory=list)
+    eye_sharp: float = 0.0     # sharpness of the strip across the eyes
+    face_score: float = 0.0    # how sure the detector was of the judged face
+    eyes_why: str = ""         # when the eyes cannot be judged, the reason
 
     @property
     def sharp(self) -> float:
@@ -260,7 +263,8 @@ def _exposure(img):
     )
 
 
-def score_image(path, faces_here, subject_frac=0.25, subject_min=0.0035):
+def score_image(path, faces_here, subject_frac=0.25, subject_min=0.0035,
+                min_face_score=0.60):
     """Score one preview. `faces_here` are the faces already found in it.
 
     `subject_min` is the fraction of the frame a face must fill to count as the
@@ -286,7 +290,11 @@ def score_image(path, faces_here, subject_frac=0.25, subject_min=0.0035):
 
     faces_here = list(faces_here or [])
     sc.detected = len(faces_here)
+    # A weak detection is a pattern in a curtain as often as it is a person,
+    # and judging focus on it condemns a good frame for the curtain's sake.
+    faces_here = [f for f in faces_here if f.score >= min_face_score]
     if not faces_here:
+        sc.eyes_why = "no face found"
         return sc
 
     faces_here.sort(key=lambda f: -(f.bbox[2] * f.bbox[3]))
@@ -298,6 +306,7 @@ def score_image(path, faces_here, subject_frac=0.25, subject_min=0.0035):
     faces_here = [f for f in faces_here if f.area_frac >= subject_min]
     sc.faces = len(faces_here)
     if not faces_here:
+        sc.eyes_why = "only small faces in the background"
         return sc
 
     biggest = faces_here[0].bbox[2] * faces_here[0].bbox[3]
@@ -311,6 +320,8 @@ def score_image(path, faces_here, subject_frac=0.25, subject_min=0.0035):
     sc.main_face_frac = faces_here[0].area_frac
     sc.face_sharp, judged = max(
         ((_face_focus(img, f.bbox), f) for f in subjects), key=lambda t: t[0])
+    sc.face_score = float(judged.score)
+    sc.eye_sharp = _eye_focus(img, judged)
     x, y, bw, bh = judged.bbox
     # Between the eyes rather than the middle of the box, which is the nose.
     sc.focus = (min(1.0, max(0.0, (x + bw / 2) / w)),
@@ -326,6 +337,12 @@ def score_image(path, faces_here, subject_frac=0.25, subject_min=0.0035):
     if ears:
         sc.ear = float(min(ears))  # the worst set of eyes among the subjects
         sc.eyes_known = True
+    elif not any(_frontal(f) for f in subjects):
+        sc.eyes_why = "the face is turned away"
+    elif all(getattr(f, "landmarks", None) is None for f in subjects):
+        sc.eyes_why = "this face model cannot measure eyes"
+    else:
+        sc.eyes_why = "the eyes are too small or hidden to measure"
     return sc
 
 
@@ -345,7 +362,7 @@ def _tier(s, reject_ratio):
     # is reported loudly and moved nowhere.
     if any(r.startswith("unreadable") for r in s.reasons):
         return "error"
-    if any(r.startswith(("black", "blown")) for r in s.reasons):
+    if any(r.startswith(("black", "blown", "misfire")) for r in s.reasons):
         return "reject"
     if "soft" in s.reasons and not math.isnan(s.blur_ratio) \
             and s.blur_ratio < reject_ratio:
@@ -355,7 +372,7 @@ def _tier(s, reject_ratio):
 
 def assess(scores, blur_ratio=0.65, eye_ratio=0.55, eye_abs=None, dark=18.0,
            bright=246.0, blown=0.35, black=0.70, min_face_frac=0.0,
-           reject_ratio=0.25, misfocus_ratio=0.5):
+           reject_ratio=0.25, misfocus_ratio=0.5, eye_soft=0.35):
     """Turn raw scores into verdicts, using this shoot's own medians as the bar.
 
     Both the sharpness and the eye test are relative. Most frames in a shoot
@@ -392,6 +409,9 @@ def assess(scores, blur_ratio=0.65, eye_ratio=0.55, eye_abs=None, dark=18.0,
     med_pair = float(np.median(pairs)) if len(pairs) >= 5 else 0.0
     med_glob = float(np.median([s.global_sharp for s in withface])) if withface else 0.0
 
+    eye_vals = [s.eye_sharp for s in withface if getattr(s, "eye_sharp", 0) > 0]
+    med_eye = float(np.median(eye_vals)) if len(eye_vals) >= 5 else 0.0
+
     for s in scores:
         if "unreadable" in s.reasons:
             continue
@@ -400,6 +420,20 @@ def assess(scores, blur_ratio=0.65, eye_ratio=0.55, eye_abs=None, dark=18.0,
 
         if bar > 0 and s.blur_ratio < blur_ratio:
             s.reasons.append("soft" if s.faces else "soft (no face detected)")
+            # Why it is soft, because the two are different mistakes. If
+            # something else in the frame is as sharp as usual, the focus
+            # landed there and missed the face. If nothing is, the camera or
+            # the subject moved. (A sharp face against a soft background is
+            # neither: that is the picture working, and it never gets here.)
+            if s.faces:
+                if med_glob > 0 and s.global_sharp >= 0.8 * med_glob:
+                    s.reasons.append("missed focus")
+                else:
+                    s.reasons.append("motion blur")
+            elif s.blur_ratio < reject_ratio:
+                # No subject and nothing sharp anywhere: the shutter went off
+                # at the floor, or while the camera was being swung round.
+                s.reasons.append("misfire (nothing in focus)")
         elif (s.faces and med_pair > 0 and s.global_sharp > 0
               and s.global_sharp >= 0.8 * med_glob
               and (s.face_sharp / s.global_sharp) < misfocus_ratio * med_pair):
@@ -408,6 +442,17 @@ def assess(scores, blur_ratio=0.65, eye_ratio=0.55, eye_abs=None, dark=18.0,
         if (ear_bar is not None and s.eyes_known and s.ear < ear_bar
                 and s.main_face_frac >= min_face_frac):
             s.reasons.append("eyes closed")
+        # The face holds up but the eyes are behind it. Only said of a frame
+        # not already called soft - it would be the same complaint twice.
+        # Only where the eyes could be read at all (a face turned away or
+        # looking down has no eye strip worth measuring), and only when they
+        # are behind the face they belong to, not merely in flat light.
+        if (s.faces and med_eye > 0 and getattr(s, "eye_sharp", 0) > 0
+                and s.eyes_known
+                and "soft" not in s.reasons and "eyes closed" not in s.reasons
+                and s.eye_sharp < eye_soft * med_eye
+                and s.eye_sharp < 0.5 * s.face_sharp):
+            s.reasons.append("eyes soft")
 
         # Clipping alone does not condemn a frame. A white subject against a
         # bright overcast sky legitimately blows out most of the frame and is
@@ -429,6 +474,209 @@ def assess(scores, blur_ratio=0.65, eye_ratio=0.55, eye_abs=None, dark=18.0,
         "median_face": med_face, "median_noface": med_no,
         "total": len(scores), "median_ear": med_ear, "ear_bar": ear_bar,
     }
+
+
+# =====================================================================
+# Analyse once, judge as often as you like (2026-11-11)
+# =====================================================================
+# Sifting used to be one act: look at every frame, decide, write the decision
+# down. Moving a threshold meant looking at every frame again - minutes of
+# face detection to learn what a slider would have told you in a second.
+#
+# Now the looking and the deciding are two things. Looking writes what was
+# *measured* to `_cullkit/scores.json`; deciding (`judge`) reads only that,
+# so it is instant and can be done again for every position of a slider.
+SCORES_FILE = "scores.json"
+OVERRIDES_FILE = "sift_overrides.json"
+SCORES_VERSION = 2
+MIN_FACE_SCORE = 0.60        # a detection weaker than this is not judged as a face
+
+SETTINGS = {
+    "blur_ratio": 0.65,      # softer than this x the shoot's median -> flagged
+    "eye_ratio": 0.55,       # eyes narrower than this x the median -> "eyes closed"
+    "eye_soft": 0.35,        # eyes softer than this x the median -> "eyes soft"
+    "reject_ratio": 0.25,    # below this x the median nothing can save it
+    "blown": 0.35, "black": 0.70,
+}
+_RAW = ("base", "faces", "detected", "face_sharp", "global_sharp", "eye_sharp",
+        "main_face_frac", "face_score", "ear", "eyes_known", "eyes_why",
+        "mean_luma", "clip_white", "clip_black")
+
+
+def _eye_focus(img, face) -> float:
+    """Sharpness of the strip across both eyes - where focus is meant to land.
+
+    A face can pass on its skin and hair while the eyes are a touch behind;
+    this is the measurement that sees it.
+    """
+    import cv2
+
+    kps = getattr(face, "kps", None)
+    if kps is None or len(kps) < 2:
+        return 0.0
+    le, re_ = kps[0], kps[1]
+    iod = float(np.linalg.norm(re_ - le))
+    if iod < 12:
+        return 0.0
+    h, w = img.shape[:2]
+    cx, cy = (le[0] + re_[0]) / 2.0, (le[1] + re_[1]) / 2.0
+    x0, x1 = int(max(0, cx - 0.85 * iod)), int(min(w, cx + 0.85 * iod))
+    y0, y1 = int(max(0, cy - 0.28 * iod)), int(min(h, cy + 0.28 * iod))
+    crop = img[y0:y1, x0:x1]
+    if crop.size == 0 or min(crop.shape[:2]) < 6:
+        return 0.0
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, (160, 52), interpolation=cv2.INTER_AREA
+                      if gray.shape[1] > 160 else cv2.INTER_CUBIC)
+    return _focus(gray)
+
+
+def to_row(s) -> dict:
+    """What was measured on one frame, and nothing that was decided about it."""
+    row = {k: getattr(s, k) for k in _RAW}
+    row["ear"] = None if (not s.eyes_known or math.isnan(s.ear)) else round(float(s.ear), 4)
+    row["focus"] = [round(float(s.focus[0]), 4), round(float(s.focus[1]), 4)]
+    for k in ("face_sharp", "global_sharp", "eye_sharp", "mean_luma"):
+        row[k] = round(float(row[k]), 4)
+    for k in ("main_face_frac", "face_score", "clip_white", "clip_black"):
+        row[k] = round(float(row[k]), 5)
+    row["unreadable"] = "unreadable" in s.reasons
+    return row
+
+
+def from_row(row, image_dir=None):
+    """A Score with its measurements back, ready to be judged afresh."""
+    base = row["base"]
+    s = Score(image=(Path(image_dir) / f"{base}.jpg") if image_dir else Path(base),
+              base=base)
+    for k in _RAW:
+        if k in row and k not in ("base", "ear"):
+            setattr(s, k, row[k])
+    s.ear = float("nan") if row.get("ear") is None else float(row["ear"])
+    s.eyes_known = bool(row.get("eyes_known")) and row.get("ear") is not None
+    f = row.get("focus") or (0.5, 0.5)
+    s.focus = (float(f[0]), float(f[1]))
+    if row.get("unreadable"):
+        s.reasons.append("unreadable")
+    s.group = row.get("group")
+    return s
+
+
+def judge(rows, settings=None, overrides=None, image_dir=None):
+    """Decide about every frame from what was measured. -> (scores, stats)
+
+    Nothing here opens a photograph. `overrides` is {base: "keep" | "reject"},
+    the photographer's own calls, and they win over everything.
+    """
+    cfg = dict(SETTINGS)
+    cfg.update({k: v for k, v in (settings or {}).items() if v is not None})
+    scores = [from_row(r, image_dir) for r in rows]
+    stats = assess(scores, blur_ratio=cfg["blur_ratio"], eye_ratio=cfg["eye_ratio"],
+                   reject_ratio=cfg["reject_ratio"], blown=cfg["blown"],
+                   black=cfg["black"], eye_soft=cfg["eye_soft"],
+                   eye_abs=cfg.get("eye_abs"),
+                   min_face_frac=cfg.get("min_face_frac") or 0.0)
+    for s in scores:
+        s.override = ""
+        mine = (overrides or {}).get(s.base)
+        if mine in ("keep", "reject") and s.tier != "error":
+            s.override = mine
+            s.tier = mine
+    mark_best(scores)
+    stats["settings"] = cfg
+    return scores, stats
+
+
+def mark_best(scores) -> None:
+    """In every run of near-identical frames, say which one to look at first.
+
+    Not the sharpest of them: the best of them. A frame Sift would keep beats
+    one it would not, open eyes beat shut ones, and only then does sharpness
+    decide - which is the order a photographer goes through a burst in.
+    """
+    rank = {"keep": 3, "review": 2, "reject": 1, "error": 0}
+    groups = {}
+    for s in scores:
+        s.best = False
+        g = getattr(s, "group", None)
+        if g is not None:
+            groups.setdefault(g, []).append(s)
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        top = max(members, key=lambda s: (
+            rank.get(s.tier, 0),
+            0 if "eyes closed" in s.reasons else 1,
+            0.0 if math.isnan(s.blur_ratio) else s.blur_ratio))
+        top.best = True
+
+
+def eyes_state(s) -> str:
+    """'open', 'closed' or 'unknown' - and unknown is an answer, not a pass."""
+    if not s.eyes_known or math.isnan(s.ear):
+        return "unknown"
+    return "closed" if "eyes closed" in s.reasons else "open"
+
+
+def frame_out(s) -> dict:
+    """One judged frame, as the screen and the record want it."""
+    nan = math.isnan(s.blur_ratio)
+    return {
+        "base": s.base, "tier": s.tier, "reasons": list(s.reasons),
+        "verdict": s.verdict, "blur_ratio": None if nan else round(s.blur_ratio, 4),
+        "sharpness": round(float(s.sharp), 4), "faces": s.faces, "detected": s.detected,
+        "main_face_frac": s.main_face_frac, "face_score": getattr(s, "face_score", 0.0),
+        "ear": None if (not s.eyes_known or math.isnan(s.ear)) else round(float(s.ear), 4),
+        "eyes": eyes_state(s), "eyes_why": getattr(s, "eyes_why", ""),
+        "mean_luma": s.mean_luma, "clip_white": s.clip_white, "clip_black": s.clip_black,
+        "face_sharp": s.face_sharp, "global_sharp": s.global_sharp,
+        "eye_sharp": getattr(s, "eye_sharp", 0.0),
+        "focus": [round(s.focus[0], 4), round(s.focus[1], 4)],
+        "group": getattr(s, "group", None), "best": bool(getattr(s, "best", False)),
+        "override": getattr(s, "override", ""),
+    }
+
+
+def load_scores(folder):
+    """The saved measurements for a shoot, or None if it has not been looked at."""
+    import json
+
+    f = Path(folder) / "_cullkit" / SCORES_FILE
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if data.get("version") != SCORES_VERSION or not isinstance(data.get("frames"), list):
+        return None
+    return data
+
+
+def load_overrides(folder) -> dict:
+    import json
+
+    try:
+        got = json.loads((Path(folder) / "_cullkit" / OVERRIDES_FILE)
+                         .read_text(encoding="utf-8"))
+        return {k: v for k, v in got.items() if v in ("keep", "reject")}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def save_override(folder, base, tier) -> dict:
+    """Record the photographer's own call on one frame; None takes it back."""
+    import json
+
+    cur = load_overrides(folder)
+    if tier in ("keep", "reject"):
+        cur[str(base)] = tier
+    else:
+        cur.pop(str(base), None)
+    d = Path(folder) / "_cullkit"
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / (OVERRIDES_FILE + ".tmp")
+    tmp.write_text(json.dumps(cur, indent=1), encoding="utf-8")
+    tmp.replace(d / OVERRIDES_FILE)
+    return cur
 
 
 def distribution(scores, buckets=10):

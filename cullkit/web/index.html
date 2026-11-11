@@ -412,7 +412,7 @@ input[type=text]{font:400 14px "IBM Plex Sans",sans-serif;padding:9px 12px;
 .shoot.joined{border-style:dashed;border-color:var(--accent);margin-top:-6px}
 .shoot.joined .shoot-name{opacity:.6}
 .shoot.joined .shoot-merge{display:none}
-.shoot-merge{font:400 13px "IBM Plex Sans",sans-serif;padding:8px 10px;
+.shoot-merge,.lr-sel{font:400 13px "IBM Plex Sans",sans-serif;padding:8px 10px;
   border-radius:8px;border:1px solid var(--rule-2);background:var(--paper);
   color:var(--ink-2);max-width:200px;flex:0 1 auto}
 
@@ -424,6 +424,42 @@ figure img{display:block;width:100%;height:150px;object-fit:cover;background:#00
 figcaption{padding:6px 8px;font:400 11.5px/1.4 "IBM Plex Mono",monospace;
   display:flex;justify-content:space-between;gap:6px;align-items:center}
 figure[data-t="reject"]{border-color:var(--reject);border-width:2px}
+/* Sift's own screen: the dials, and a figure that can explain itself. */
+.sift-sum{margin:8px 0 2px;font-size:13px}
+.sift-dialbox{display:grid;gap:14px 22px;margin-top:14px;
+  grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.sift-dial{display:block}
+.sift-dialtop{display:flex;justify-content:space-between;gap:10px;align-items:baseline;
+  font-size:13.5px;font-weight:500}
+.sift-dialtop .muted{font-size:11.5px;font-weight:400;text-align:right}
+.sift-dial input[type=range]{width:100%;margin:8px 0 0;accent-color:var(--accent);
+  height:28px;touch-action:pan-y}
+.sift-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.sift-tabs button{font:500 12.5px "IBM Plex Sans",sans-serif;padding:8px 12px;min-height:36px;
+  border-radius:18px;border:1px solid var(--rule-2);background:transparent;
+  color:var(--ink-2);cursor:pointer}
+.sift-tabs button[data-on="1"]{background:var(--accent-soft);color:var(--accent);
+  border-color:var(--accent)}
+.sift-fig{position:relative}
+.sift-fig[data-t="keep"]{border-color:var(--rule)}
+.sift-badge{border:0;cursor:pointer;font:inherit;font-size:11px;white-space:nowrap}
+.sift-best{position:absolute;top:6px;left:6px;padding:2px 7px;border-radius:9px;
+  background:rgba(0,0,0,.72);color:#ffd76a;font:500 10.5px "IBM Plex Sans",sans-serif}
+.sift-ov{position:absolute;top:6px;right:6px;padding:5px 9px;min-height:28px;border-radius:14px;
+  border:0;background:rgba(0,0,0,.72);color:#fff;cursor:pointer;
+  font:500 11px "IBM Plex Sans",sans-serif;opacity:0;transition:opacity .12s}
+.sift-fig:hover .sift-ov,.sift-ov:focus-visible{opacity:1}
+@media (hover:none){.sift-ov{opacity:1}}
+.sift-why{position:absolute;left:0;right:0;top:0;height:150px;margin:0;overflow:auto;
+  padding:30px 10px 8px 24px;background:rgba(0,0,0,.84);color:#fff;
+  font:400 11.5px/1.45 "IBM Plex Sans",sans-serif}
+.sift-why li{margin:0 0 3px}
+/* Stars and colours for Lightroom: the same few choices in Sift and the darkroom. */
+.lr-opts{display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center;vertical-align:middle}
+.lr-sel{max-width:none;min-height:36px}
+.sift-lr{margin-top:12px;padding-top:12px;border-top:1px solid var(--rule)}
+.sift-lr .lr-line{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0;font-size:13.5px}
+.sift-lr .lr-line>span:first-child{min-width:74px;color:var(--ink-2)}
 figure[data-t="review"]{border-color:var(--review);border-width:2px}
 
 pre.log{background:var(--sunk);border:1px solid var(--rule);border-radius:8px;
@@ -2932,6 +2968,11 @@ body:has(#dev-viewer:not(.hide)) #yt-dock{bottom:calc(120px + env(safe-area-inse
       <input type="checkbox" id="dev-rest" checked style="margin-top:3px">
       <span><span>Then move the folder with what I did not pick to the discards</span>
         <span class="mono muted" id="dev-rest-path" style="display:block;font-size:12.5px"></span></span>
+    </label>
+    <label class="row" id="dev-lr-row" style="margin-top:12px;gap:8px;align-items:flex-start;cursor:pointer">
+      <input type="checkbox" id="dev-lr" style="margin-top:3px">
+      <span><span>Mark them for Lightroom</span> <span class="lr-opts" id="dev-lr-opts"></span>
+        <span class="muted" style="display:block;font-size:12.5px">Stars and a colour, written in .xmp files beside the RAWs where they land. The photos themselves are not touched.</span></span>
     </label>
     <div class="row" style="margin-top:12px">
       <button class="act ghost" id="dev-check">Check first</button>
@@ -6739,7 +6780,229 @@ $('#cl-load').onclick = () => CULL_DIR
   : alert('Pick a shoot folder first.');
 
 
+/* ================= Sift: measured once, judged as often as you like =========
+   The slow part of Sift - opening every frame, finding the faces - happens
+   once and is written down. Everything on this screen works from that record:
+   a dial moves, the server judges the same measurements again, and the answer
+   is back before the finger is off the glass. Nothing here opens a photograph
+   and nothing here moves one; "Move flagged" is still the only thing that does,
+   and it is still his to press. */
+const SIFT_DIALS = [
+  {k: 'blur', s: 'blur_ratio', flag: '--blur-ratio', name: 'Softness', min: .3, max: 1,
+   say: v => 'flag anything under ' + v.toFixed(2) + '× this shoot’s usual sharpness'},
+  {k: 'reject', s: 'reject_ratio', flag: '--reject-ratio', name: 'Throw-out line', min: .05, max: .6,
+   say: v => 'under ' + v.toFixed(2) + '× goes to Rejects, not Review'},
+  {k: 'eyes', s: 'eye_ratio', flag: '--eye-ratio', name: 'Eyes closed', min: .3, max: .9,
+   say: v => 'eyes narrower than ' + v.toFixed(2) + '× the usual count as closed'},
+  {k: 'eye_soft', s: 'eye_soft', flag: '--eye-soft', name: 'Eyes soft', min: .2, max: .9,
+   say: v => 'eyes under ' + v.toFixed(2) + '× the usual eye sharpness'},
+  {k: 'blown', s: 'blown', flag: '--blown', name: 'Blown highlights', min: .05, max: .8,
+   say: v => 'more than ' + Math.round(v * 100) + '% of the frame pure white'},
+  {k: 'black', s: 'black', flag: '--black', name: 'Crushed blacks', min: .2, max: .95,
+   say: v => 'more than ' + Math.round(v * 100) + '% of the frame pure black'},
+];
+const SIFT_PAGE = 240;
+const SIFT_BADGE = {keep: ['Select', 'keep'], review: ['Review', 'rev'],
+                    reject: ['Reject', 'rej'], error: ['Unreadable', 'rej']};
+function siftSaved(folder) {
+  try { return JSON.parse(localStorage.getItem('aftershot.sift.' + folder) || '{}') || {}; }
+  catch (e) { return {}; }
+}
+function siftQuery(folder, set) {
+  let u = '/api/sift?folder=' + encodeURIComponent(folder);
+  SIFT_DIALS.forEach(d => { if (set[d.k] != null) u += '&' + d.k + '=' + set[d.k]; });
+  return u;
+}
+/* Why one frame got the badge it has, as lines a person would say. Eyes get a
+   line of their own always, because "cannot tell" is an answer too and must
+   not look like "open". */
+function siftWhy(f) {
+  const out = f.reasons.length ? f.reasons.slice() : ['nothing wrong found'];
+  out.push(f.eyes === 'unknown'
+    ? 'eyes: cannot tell' + (f.eyes_why ? ' — ' + f.eyes_why : '')
+    : 'eyes: ' + f.eyes);
+  if (f.blur_ratio != null) out.push('sharpness ' + f.blur_ratio.toFixed(2) + '× the usual');
+  if (f.best) out.push('the best of its run of similar frames');
+  if (f.override) out.push('your own call — it stands over the measurements');
+  return out;
+}
+async function showSift(folder, into, first) {
+  const host = into || $('#cl-result'); host.innerHTML = '';
+  const S = {set: siftSaved(folder), d: first, tab: 'flagged', shown: SIFT_PAGE, seq: 0, t: 0};
+  if (Object.keys(S.set).length) {
+    try { const d = await (await fetch(siftQuery(folder, S.set))).json();
+          if (!d.missing) S.d = d; } catch (e) {}
+  }
+  const prevDir = pjoin(pjoin(folder, '_cullkit'), 'previews');
+  const keepSet = () => { try { localStorage.setItem('aftershot.sift.' + folder,
+    JSON.stringify(S.set)); } catch (e) {} };
+
+  const head = el('div', 'card');
+  const chips = el('div', 'row'), sum = el('div', 'muted sift-sum');
+  head.appendChild(chips); head.appendChild(sum);
+  head.appendChild(el('div', 'muted', 'Review means look at it, not that it is bad.'));
+  const acts = el('div', 'row'); acts.style.marginTop = '12px';
+  const apply = el('button', 'act', 'Move flagged into Review and Rejects');
+  const lg2 = el('pre', 'log hide'); lg2.dataset.name = 'Move flagged aside';
+  apply.onclick = () => {
+    const argv = ['quality', folder, '--from-cache', '--apply'];
+    SIFT_DIALS.forEach(d => argv.push(d.flag, String(S.d.settings[d.s])));
+    run(argv, lg2, () => { loadState(); refetch(); });
+  };
+  const dev = el('button', 'act ghost', 'Into the darkroom →');
+  dev.title = 'pick your selection from what is left';
+  dev.onclick = () => devEnter(folder);
+  const lrBox = siftLightroom(folder, () => {
+    const a = []; SIFT_DIALS.forEach(d => a.push(d.flag, String(S.d.settings[d.s]))); return a; });
+  const lrBtn = el('button', 'act ghost', 'Stars & colours for Lightroom');
+  lrBtn.onclick = () => lrBox.classList.toggle('hide');
+  acts.appendChild(apply); acts.appendChild(dev); acts.appendChild(lrBtn);
+  head.appendChild(acts); head.appendChild(lg2); head.appendChild(lrBox);
+  host.appendChild(head);
+
+  const dials = el('div', 'card sift-dials');
+  dials.appendChild(el('h2', '', 'how strict'));
+  dials.appendChild(el('div', 'muted',
+    'Every frame was measured once. Moving these only changes the verdict — ' +
+    'nothing is analysed again.'));
+  const dialBox = el('div', 'sift-dialbox'); const parts = {};
+  SIFT_DIALS.forEach(d => {
+    const w = el('label', 'sift-dial');
+    const top = el('div', 'sift-dialtop');
+    top.appendChild(el('span', '', d.name));
+    const say = el('span', 'muted'); top.appendChild(say);
+    const inp = el('input'); inp.type = 'range';
+    inp.min = d.min; inp.max = d.max; inp.step = .01;
+    inp.oninput = () => {
+      S.set[d.k] = +inp.value; say.textContent = d.say(+inp.value); keepSet();
+      clearTimeout(S.t); S.t = setTimeout(refetch, 130);
+    };
+    w.appendChild(top); w.appendChild(inp); dialBox.appendChild(w);
+    parts[d.k] = {inp, say};
+  });
+  dials.appendChild(dialBox);
+  const drow = el('div', 'row'); drow.style.marginTop = '10px';
+  const reset = el('button', 'act ghost', 'Back to the usual');
+  reset.onclick = () => { S.set = {}; keepSet(); refetch(); };
+  const again = el('button', 'act ghost', 'Measure again');
+  again.title = 'look at every frame afresh — only needed if the photos changed';
+  const lg3 = el('pre', 'log hide'); lg3.dataset.name = 'Sift';
+  again.onclick = () => run(['quality', folder, '--fresh'], lg3,
+    () => { loadState(); refetch(); });
+  drow.appendChild(reset); drow.appendChild(again);
+  dials.appendChild(drow); dials.appendChild(lg3); host.appendChild(dials);
+
+  const wrap = el('div', 'card');
+  const tabs = el('div', 'sift-tabs'); const tabBtn = {};
+  [['flagged', 'Flagged'], ['keep', 'Selects'], ['best', 'Best of each run'], ['all', 'All']]
+    .forEach(([k, label]) => {
+      const b = el('button', '', label); b.dataset.label = label;
+      b.onclick = () => { S.tab = k; S.shown = SIFT_PAGE; paint(); };
+      tabs.appendChild(b); tabBtn[k] = b;
+    });
+  const grid = el('div', 'grid');
+  const more = el('button', 'act ghost hide', 'Show more');
+  more.style.marginTop = '12px';
+  more.onclick = () => { S.shown += SIFT_PAGE; paint(); };
+  wrap.appendChild(tabs); wrap.appendChild(grid); wrap.appendChild(more);
+  host.appendChild(wrap);
+
+  async function refetch() {
+    const my = ++S.seq;
+    try {
+      const d = await (await fetch(siftQuery(folder, S.set))).json();
+      if (my !== S.seq || d.missing) return;
+      S.d = d; paint();
+    } catch (e) {}
+  }
+  async function overrule(f) {
+    const tier = f.override ? null : (f.tier === 'keep' ? 'reject' : 'keep');
+    const body = Object.assign({folder, base: f.base, tier}, S.set);
+    const my = ++S.seq;
+    try {
+      const d = await (await fetch('/api/sift/override', {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})).json();
+      if (my !== S.seq || d.missing || d.error) return;
+      S.d = d; paint();
+    } catch (e) {}
+  }
+  function figure(f, n, list) {
+    const fig = el('figure', 'sift-fig'); fig.dataset.t = f.tier;
+    const img = el('img'); img.loading = 'lazy';
+    img.src = '/api/thumb?size=340&path=' + encodeURIComponent(pjoin(prevDir, f.base + '.jpg'));
+    fig.appendChild(img);
+    if (f.best) fig.appendChild(el('span', 'sift-best', '★ best of its run'));
+    const lines = siftWhy(f);
+    const why = el('ul', 'sift-why hide');
+    lines.forEach(t => why.appendChild(el('li', '', t)));
+    fig.appendChild(why);
+    const cap = el('figcaption');
+    cap.appendChild(el('span', '', f.base.replace(/^_/, '')));
+    const b = SIFT_BADGE[f.tier] || SIFT_BADGE.keep;
+    const badge = el('button', 'chip sift-badge c-' + b[1],
+      (f.override ? '✋ ' : '') + b[0] +
+      (f.reasons.length ? ' · ' + f.reasons.length : ''));
+    badge.title = lines.join('\n');
+    badge.onclick = e => { e.stopPropagation(); why.classList.toggle('hide'); };
+    cap.appendChild(badge);
+    fig.appendChild(cap);
+    if (f.tier !== 'error') {
+      const ov = el('button', 'sift-ov',
+        f.override ? 'Undo my call' : (f.tier === 'keep' ? 'Reject it' : 'Keep it'));
+      ov.onclick = e => { e.stopPropagation(); overrule(f); };
+      fig.appendChild(ov);
+    }
+    fig.onclick = () => lightbox(folder, list, n);
+    return fig;
+  }
+  function paint() {
+    const d = S.d, c = d.count;
+    chips.innerHTML = '';
+    chips.appendChild(el('span', 'chip c-keep', c.keep + ' keep'));
+    chips.appendChild(el('span', 'chip c-rev', c.review + ' review'));
+    chips.appendChild(el('span', 'chip c-rej', c.reject + ' reject'));
+    if (c.error) chips.appendChild(el('span', 'chip c-rej', c.error + ' unreadable'));
+    if (d.groups) chips.appendChild(el('span', 'chip c-card',
+      d.groups + ' runs of similar frames'));
+    sum.textContent = Object.entries(d.reasons).sort((a, b) => b[1] - a[1])
+      .map(([r, n]) => n + ' ' + r).join('  ·  ') || 'Nothing flagged at these settings.';
+    SIFT_DIALS.forEach(dl => {
+      const v = +d.settings[dl.s];
+      if (document.activeElement !== parts[dl.k].inp) parts[dl.k].inp.value = v;
+      parts[dl.k].say.textContent = dl.say(v);
+    });
+    const live = d.frames.filter(f => !f.moved);
+    const soft = f => f.blur_ratio == null ? 9e9 : f.blur_ratio;
+    const lists = {
+      flagged: live.filter(f => f.tier === 'review' || f.tier === 'reject')
+                   .sort((a, b) => soft(a) - soft(b)),
+      keep: live.filter(f => f.tier === 'keep'),
+      best: live.filter(f => f.best),
+      all: live,
+    };
+    Object.keys(tabBtn).forEach(k => {
+      tabBtn[k].textContent = tabBtn[k].dataset.label + ' ' + lists[k].length;
+      tabBtn[k].dataset.on = k === S.tab ? '1' : '0';
+    });
+    apply.disabled = !lists.flagged.length;
+    const list = lists[S.tab];
+    grid.innerHTML = '';
+    list.slice(0, S.shown).forEach((f, n) => grid.appendChild(figure(f, n, list)));
+    if (!list.length) grid.appendChild(el('div', 'empty',
+      S.tab === 'flagged' ? 'Nothing flagged at these settings.' : 'Nothing here.'));
+    more.classList.toggle('hide', list.length <= S.shown);
+    more.textContent = 'Show ' + Math.min(SIFT_PAGE, list.length - S.shown) + ' more';
+  }
+  paint();
+  if (!into) dressResult(host, 'Sift — ' + shortName(folder));
+}
+
 async function showCull(folder, into) {
+  // A folder sifted since 2026-11-11 has its measurements saved, and gets the
+  // screen that can re-judge them. An older one is shown as it always was.
+  let sift = null;
+  try { sift = await (await fetch(siftQuery(folder, {}))).json(); } catch (e) {}
+  if (sift && !sift.missing && sift.frames) return showSift(folder, into, sift);
   const d = await (await fetch('/api/quality?folder=' + encodeURIComponent(folder))).json();
   const host = into || $('#cl-result'); host.innerHTML = '';
   if (d.missing) { host.appendChild(el('div', 'empty', 'not sifted yet')); return;
@@ -6777,7 +7040,7 @@ async function showCull(folder, into) {
     const fig = el('figure'); fig.dataset.t = f.tier;
     const img = el('img'); img.loading = 'lazy';
     img.src = '/api/thumb?size=340&path=' +
-      encodeURIComponent(folder + '\\_cullkit\\previews\\' + f.base + '.jpg');
+      encodeURIComponent(pjoin(pjoin(pjoin(folder, '_cullkit'), 'previews'), f.base + '.jpg'));
     fig.appendChild(img);
     const cap = el('figcaption');
     cap.appendChild(el('span', '', f.base.replace(/^_/, '')));
@@ -7035,7 +7298,7 @@ function lightbox(folder, frames, i) {
 }
 function paintLB() {
   const f = LB.frames[LB.i];
-  const preview = LB.folder + '\\_cullkit\\previews\\' + f.base + '.jpg';
+  const preview = pjoin(pjoin(pjoin(LB.folder, '_cullkit'), 'previews'), f.base + '.jpg');
   LB.img.src = '/api/thumb?size=4096&path=' + encodeURIComponent(preview);
   LB.name.textContent = `${f.base.replace(/^_/, '')}  ·  ${LB.i + 1} of ${LB.frames.length}` +
     `  ·  ${f.verdict}`;
@@ -7812,6 +8075,30 @@ $('#flow-skip').onclick = () => {
 const DEV = {folder: '', mode: '', frames: [], groups: null,
              gi: 0, i: 0, picked: new Set(), skipped: new Set(), fromFlow: false};
 
+/* What Sift already measured, shown where the picking happens. The darkroom
+   used to know only which frame of a run was sharpest; Sift knows which is
+   best - kept, eyes open, then sharp - and why any other one was flagged. It
+   is read from Sift's saved measurements, so it costs nothing, and a folder
+   that was never sifted simply shows what it always did. */
+async function devLoadSift(folder) {
+  DEV.sift = {};
+  try {
+    const d = await (await fetch(siftQuery(folder, siftSaved(folder)))).json();
+    if (!d.missing && d.frames && DEV.folder === folder)
+      d.frames.forEach(f => { DEV.sift[f.base] = f; });
+  } catch (e) {}
+}
+function devSiftNote(it) {
+  const S = DEV.sift || {}, f = S[it.stem] || S[it.base];
+  const g = DEV.groups && DEV.groups[DEV.gi];
+  let star = '';
+  if (g) {
+    const sb = g.items.find(x => (S[x.stem] || S[x.base] || {}).best);
+    if (sb ? sb.base === it.base : it.base === g.best)
+      star = sb ? '   ★ best here' : '   ★ sharpest here';
+  }
+  return star + (f && f.reasons.length ? '   ·  Sift: ' + f.reasons.join(', ') : '');
+}
 function devEnter(folder) {
   DEV.folder = folder || '';
   DEV.fromFlow = !!folder;
@@ -8044,6 +8331,7 @@ async function openDoor(door, at, auto) {
     holder.classList.add('hide');
   }
   DEV.frames = f.frames.filter(x => x.preview);
+  devLoadSift(DEV.folder);
   if (!DEV.frames.length) { alert('No previews could be made for this folder.'); return; }
 
   if (door === 'assisted') {
@@ -8121,8 +8409,7 @@ function paintViewer() {
   // Warm the next one while you are looking at this one.
   const nxt = list[DEV.i + 1];
   if (nxt) { const pre = new Image(); pre.src = thumbURL(nxt, 4096); }
-  $('#v-name').textContent = it.base +
-    (DEV.groups && it.base === DEV.groups[DEV.gi].best ? '   ★ sharpest here' : '');
+  $('#v-name').textContent = it.base + devSiftNote(it);
   $('#v-count').textContent = `${DEV.i + 1} of ${list.length}  ·  ${DEV.picked.size} picked`;
   $('#v-group').textContent = '';
   // Group controls only make sense in assisted mode.
@@ -8389,6 +8676,85 @@ function updateDevRest() {
   $('#dev-rest-path').textContent = blocked || pjoin(devRestRoot(), name);
 }
 function devRestOn() { return !$('#dev-rest').disabled && $('#dev-rest').checked; }
+
+/* ================= for Lightroom =================
+   A selection made here used to arrive in Lightroom bare, and was starred a
+   second time by hand. Now the picks can carry stars and a colour in .xmp
+   sidecars - the place Lightroom reads them from - and so can Sift's verdicts.
+   Lightroom does not read Pick / Reject flags from a file at all, so a reject
+   travels as a colour. The label is text and must be in Lightroom's own
+   language to show as a colour, which is why it asks. */
+const LR_COLOURS = [['none', 'no colour'], ['red', 'Red'], ['yellow', 'Yellow'],
+                    ['green', 'Green'], ['blue', 'Blue'], ['purple', 'Purple']];
+const LR_STARS = [[0, 'no stars'], [1, '★'], [2, '★★'], [3, '★★★'], [4, '★★★★'], [5, '★★★★★']];
+const LR_LANGS = [['en', 'Lightroom in English'], ['es', 'Lightroom en español']];
+function lrPrefs() {
+  const p = {on: false, stars: 3, pick: 'green', sstars: 0, keep: 'green',
+             review: 'yellow', reject: 'red', lang: 'en'};
+  try { Object.assign(p, JSON.parse(localStorage.getItem('aftershot.lr') || '{}')); } catch (e) {}
+  return p;
+}
+function lrSet(k, v) {
+  const p = lrPrefs(); p[k] = v;
+  try { localStorage.setItem('aftershot.lr', JSON.stringify(p)); } catch (e) {}
+}
+function lrSelect(options, key, numeric) {
+  const sel = el('select', 'lr-sel');
+  options.forEach(([v, label]) => { const o = el('option', '', label); o.value = v; sel.appendChild(o); });
+  sel.value = String(lrPrefs()[key]);
+  sel.onclick = e => e.stopPropagation();
+  sel.onchange = () => lrSet(key, numeric ? +sel.value : sel.value);
+  return sel;
+}
+function devMarkArgs(a) {
+  const p = lrPrefs();
+  if (!$('#dev-lr').checked || (!p.stars && p.pick === 'none')) return;
+  if (p.stars) a.push('--stars', String(p.stars));
+  if (p.pick !== 'none') a.push('--label', p.pick);
+  a.push('--label-lang', p.lang);
+}
+(function () {
+  const box = $('#dev-lr-opts');
+  box.appendChild(lrSelect(LR_STARS, 'stars', true));
+  box.appendChild(lrSelect(LR_COLOURS, 'pick'));
+  box.appendChild(lrSelect(LR_LANGS, 'lang'));
+  $('#dev-lr').checked = !!lrPrefs().on;
+  $('#dev-lr').onchange = () => lrSet('on', $('#dev-lr').checked);
+})();
+/* The same for a sifted folder that is going to be picked in Lightroom rather
+   than here: selects, review and rejects each get what he chooses. */
+function siftLightroom(folder, dialArgs) {
+  const box = el('div', 'sift-lr hide');
+  box.appendChild(el('div', 'muted',
+    'Writes .xmp files beside the RAWs so Lightroom shows Sift’s verdicts as ' +
+    'stars and colours. No photo is changed; an .xmp that is already there keeps ' +
+    'everything else in it.'));
+  const line = (name, ...parts) => {
+    const l = el('div', 'lr-line'); l.appendChild(el('span', '', name));
+    parts.forEach(x => l.appendChild(x)); box.appendChild(l);
+  };
+  line('Selects', lrSelect(LR_STARS, 'sstars', true), lrSelect(LR_COLOURS, 'keep'));
+  line('Review', lrSelect(LR_COLOURS, 'review'));
+  line('Rejects', lrSelect(LR_COLOURS, 'reject'));
+  line('', lrSelect(LR_LANGS, 'lang'));
+  const log = el('pre', 'log hide'); log.dataset.name = 'Mark for Lightroom';
+  const argv = apply => {
+    const p = lrPrefs();
+    const a = ['xmp', folder, '--stars', String(p.sstars), '--keep-label', p.keep,
+               '--review-label', p.review, '--reject-label', p.reject,
+               '--label-lang', p.lang].concat(dialArgs());
+    if (apply) a.push('--apply');
+    return a;
+  };
+  const row = el('div', 'row'); row.style.marginTop = '10px';
+  const check = el('button', 'act ghost', 'Check first');
+  const write = el('button', 'act', 'Write them');
+  check.onclick = () => run(argv(false), log);
+  write.onclick = () => run(argv(true), log);
+  row.appendChild(check); row.appendChild(write);
+  box.appendChild(row); box.appendChild(log);
+  return box;
+}
 $('#dev-name').addEventListener('input', updateDevDest);
 // The two places selects actually go, one tap each, so the path is never a guess.
 $('#dest-work').onclick = () => {
@@ -8407,7 +8773,7 @@ function devMoveArgv(apply) {
     if (m) a.push(m[1]);
   });
   a.push('--dest', root, '--into', name);
-  if (devRestOn()) a.push('--discard-rest');
+  devMarkArgs(a); if (devRestOn()) a.push('--discard-rest');
   if (apply) a.push('--apply');
   return a;
 }
@@ -8451,7 +8817,7 @@ function devNumsArgv(apply, withDest) {
     const name = $('#dev-name').value.trim() ||
       ((pname(DEV.folder) || 'Shoot') + ' Selects');
     a.push('--dest', root, '--into', name);
-    if (devRestOn()) a.push('--discard-rest');
+    devMarkArgs(a); if (devRestOn()) a.push('--discard-rest');
   }
   if (apply) a.push('--apply');
   return a;

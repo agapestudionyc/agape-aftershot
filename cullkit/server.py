@@ -481,7 +481,8 @@ def _job_label(argv):
     names = {"quality": "Sifting", "import": "Importing", "shoots": "Separating",
              "work": "Moving your picks", "people": "Grouping by who is in them",
              "preview": "Pulling previews", "commit": "Naming the shoots",
-             "poses": "Grouping the near-identical"}
+             "poses": "Grouping the near-identical",
+             "xmp": "Marking for Lightroom"}
     return names.get(argv[0] if argv else "", "Working") if argv else "Working"
 
 
@@ -747,6 +748,63 @@ const go=async()=>{const r=await fetch('/api/login',{method:'POST',
 document.getElementById('g').onclick=go;
 document.getElementById('p').addEventListener('keydown',e=>{if(e.key==='Enter')go()});
 </script></div></body></html>"""
+
+
+def _num(q, key):
+    try:
+        v = float(q.get(key))
+    except (TypeError, ValueError):
+        return None
+    return v if v == v else None
+
+
+def _sift(q):
+    """Judge a sifted folder from its saved measurements. No photograph is
+    opened, so this answers in the time it takes to move a slider."""
+    from . import quality as Q
+    from . import taste
+
+    folder = str(q.get("folder") or "")
+    saved = Q.load_scores(folder) if folder else None
+    if saved is None:
+        return {"missing": True}
+    blur = _num(q, "blur")
+    learned = None
+    if blur is None:
+        learned = taste.learned_blur_ratio()
+        blur = learned["ratio"] if learned else taste.DEFAULT_RATIO
+    scores, stats = Q.judge(saved["frames"], {
+        "blur_ratio": blur, "eye_ratio": _num(q, "eyes"),
+        "eye_soft": _num(q, "eye_soft"), "reject_ratio": _num(q, "reject"),
+        "blown": _num(q, "blown"), "black": _num(q, "black"),
+    }, Q.load_overrides(folder))
+    # Frames already moved out by an earlier "Move flagged" are still in the
+    # measurements (the medians need them) but are no longer his to decide.
+    try:
+        here = {Path(e.name).stem for e in os.scandir(folder) if e.is_file()}
+    except OSError:
+        here = None
+    frames = []
+    for s in scores:
+        f = Q.frame_out(s)
+        f["moved"] = bool(here is not None and s.base not in here)
+        frames.append(f)
+    live = [f for f in frames if not f["moved"]]
+    count = {t: sum(1 for f in live if f["tier"] == t)
+             for t in ("keep", "review", "reject", "error")}
+    reasons = {}
+    for f in live:
+        if f["tier"] in ("review", "reject"):
+            for r in f["reasons"]:
+                reasons[r] = reasons.get(r, 0) + 1
+    return {
+        "folder": folder, "analysed": saved.get("analysed"),
+        "settings": stats["settings"], "learned": bool(learned),
+        "defaults": dict(Q.SETTINGS, blur_ratio=blur if learned else Q.SETTINGS["blur_ratio"]),
+        "median_sharpness": stats.get("median_sharpness"),
+        "count": count, "reasons": reasons, "frames": frames,
+        "groups": len({f["group"] for f in live if f["group"] is not None}),
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1032,6 +1090,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/quality":
                 return self._send(200, self._read_json(
                     Path(q["folder"]) / "_cullkit" / "quality.json"))
+            if path == "/api/sift":
+                return self._send(200, _sift(q))
             if path == "/api/focus":
                 return self._send(200, self._focus(
                     q.get("folder", ""), q.get("stem", ""), q.get("path", "")))
@@ -1279,6 +1339,17 @@ class Handler(BaseHTTPRequestHandler):
                      done=True, force=True)
                 from . import push
                 return self._send(200, push.wake_all())
+            if path == "/api/sift/override":
+                # His own call on one frame. It touches a small file beside
+                # the measurements and no photograph, so it is allowed while
+                # anything else is running.
+                from . import quality as Q
+                folder, base = str(data.get("folder") or ""), str(data.get("base") or "")
+                if not folder or not base or not Path(folder).is_dir():
+                    return self._send(400, {"error": "no such folder or frame"})
+                tier = data.get("tier")
+                Q.save_override(folder, base, tier if tier in ("keep", "reject") else None)
+                return self._send(200, _sift(data))
             if path == "/api/job/stop":
                 # Leaving a screen with work on it means stopping the work, not
                 # abandoning it to run on unattended. Named ids only: the caller

@@ -29,7 +29,7 @@ Run the whole thing start to finish, or any one step by itself.
 |---|---|
 | **Import & Verify** | Copies a card or a folder and checksums every file against the original. The card is only ever read. When the report says every file matched, it is safe to reformat in camera. |
 | **Separate Projects** | One card often holds several shoots. It reads capture times and *who is in front of the camera*: a new person after a pause is a new shoot, the same person against a different backdrop is not. It says why it cut where it did, and — once you confirm and name them — gives each its own folder. |
-| **Sift** | Judges focus on the face, not the frame, so shallow depth of field is not mistaken for a miss. Soft, blinked and ruined frames are moved to a review folder for your call. |
+| **Sift** | Judges focus on the face, not the frame, so shallow depth of field is not mistaken for a miss. Every frame is measured **once**; after that the dials (softness, eyes, exposure) re-judge instantly. Each flagged frame says why — missed focus, motion blur, eyes closed, misfire — and one press overrules it. Similar frames are grouped and the best of each run is marked. Flagged frames move to a review folder for your call. |
 
 ### Darkroom (red) — choose
 
@@ -39,6 +39,8 @@ you cannot judge colour under a safelight. Three ways to work:
 - **I have my numbers** — paste `8417, 8420-8424, 8431` and it finds and moves them.
 - **Develop** — every frame, big, one at a time. Arrow keys and Space, or swipe on a phone.
 - **Assisted Development** — near-identical frames are grouped first; pick the best of each.
+
+**For Lightroom:** picks can leave with stars and a colour label, and Sift's verdicts can be written the same way, as `.xmp` sidecars beside the RAWs. The photographs themselves are never written to. (Lightroom does not read Pick/Reject flags from files, so a reject travels as a colour.)
 
 Zoom reads the original file at 100% or 200%. Your picks are saved as you go.
 

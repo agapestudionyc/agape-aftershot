@@ -820,9 +820,119 @@ def cmd_work(args):
                else selects.parse_text(" ".join(args.numbers or [])))
         L.record_selects(folder, sel.numbers, dest)
         echo(f"  recorded in the ledger: {len(sel.numbers)} selects from {folder.name}")
+    if rc == 0 and (args.stars or args.label):
+        _mark_picks(getattr(ns, "_plan", None), args)
     if rc == 0 and rest:
         rc = _discard_rest(folder, rest, getattr(ns, "_plan", None), args.apply)
     return rc
+
+
+def _mark_picks(plan, args):
+    """Stars and a colour on the picks, in sidecars beside them where they land.
+
+    Done after the move and in the selection's own folder, so the shoot the
+    picks came from is never written to, and Lightroom finds the marks the
+    moment that folder is imported.
+    """
+    from . import xmp as X
+
+    label = X.label_text(args.label, args.label_lang)
+    rating = args.stars or None
+    said = " and ".join(x for x in (X.stars(rating) if rating else "",
+                                    f'the label "{label}"' if label else "") if x)
+    rule("for Lightroom")
+    if plan is None:
+        return
+    if not args.apply:
+        n = sum(1 for op in plan.ops if op.status == "pending"
+                and X.mark(op.src, rating, label) != "not-raw")
+        echo(f"  then {n} RAW files get {said}, in .xmp sidecars beside them")
+        return
+    tally = X.mark_many([(op.dst, rating, label) for op in plan.ops
+                         if op.status == "done"], apply=True)
+    _xmp_report(tally, said)
+
+
+def _xmp_report(tally, said=""):
+    done = tally.get("new", 0) + tally.get("changed", 0)
+    echo(f"  {done} sidecars written" + (f": {said}" if said else "") +
+         (f"   ({tally['same']} already said so)" if tally.get("same") else ""))
+    if tally.get("changed"):
+        echo(f"  {tally['changed']} of those already existed: only the rating and label "
+             "were changed,")
+        echo("  and the originals are kept in _cullkit\\xmp-backup")
+    if tally.get("not-raw"):
+        echo(f"  {tally['not-raw']} JPEG / DNG files skipped - Lightroom reads those "
+             "from inside the file")
+    if tally.get("strange"):
+        echo(f"  {tally['strange']} sidecars were not XMP this can safely edit, and "
+             "were left alone")
+    if tally.get("failed"):
+        echo(f"  !! {tally['failed']} could not be written (is the drive full or read-only?)")
+
+
+# --------------------------------------------------------------------------- xmp
+def cmd_xmp(args):
+    """Sift's verdicts as stars and colour labels, where Lightroom reads them."""
+    from . import plat
+    from . import quality as Q
+    from . import xmp as X
+
+    folder = Path(args.folder)
+    if (Path(plat.mount_of(folder)) / "DCIM").is_dir():
+        echo("  That folder is on a camera card, and nothing is ever written to a card.")
+        echo("  Import it first, then mark the copy.")
+        return 1
+    idx = _index(args)
+    saved = Q.load_scores(idx.root)
+    if saved is None:
+        echo("  This folder has not been sifted, so there are no verdicts to write.")
+        echo(f"  Run:  cull quality \"{folder}\"")
+        return 1
+    if args.blur_ratio is None:
+        from . import taste
+        learned = taste.learned_blur_ratio()
+        args.blur_ratio = learned["ratio"] if learned else taste.DEFAULT_RATIO
+    scores, _ = Q.judge(saved["frames"], {
+        "blur_ratio": args.blur_ratio, "eye_ratio": args.eye_ratio,
+        "reject_ratio": args.reject_ratio, "eye_soft": args.eye_soft,
+        "blown": args.blown, "black": args.black,
+    }, Q.load_overrides(idx.root))
+    tier = {s.base: s.tier for s in scores}
+    lang = args.label_lang
+    marks = {
+        "keep": (args.stars or None, X.label_text(args.keep_label, lang)),
+        "review": (None, X.label_text(args.review_label, lang)),
+        "reject": (-1 if args.reject_rating else None, X.label_text(args.reject_label, lang)),
+    }
+    rule("for Lightroom")
+    for t, name in (("keep", "selects"), ("review", "review"), ("reject", "rejects")):
+        r, l = marks[t]
+        n = sum(1 for st in idx.stacks if st.primary and tier.get(st.primary.stem) == t)
+        what = ", ".join(x for x in (X.stars(r) if r is not None else "",
+                                     f'label "{l}"' if l else "") if x) or "left as they are"
+        echo(f"  {n:4d} {name:<8} {what}")
+    items = []
+    for st in idx.stacks:
+        t = tier.get(st.primary.stem) if st.primary else None
+        if t not in marks or marks[t] == (None, None):
+            continue
+        targets = st.raws or ([st.primary] if st.primary else [])
+        items.extend((raw, marks[t][0], marks[t][1]) for raw in targets)
+    tally = X.mark_many(items, apply=args.apply)
+    echo("")
+    if not args.apply:
+        n = tally.get("new", 0) + tally.get("changed", 0)
+        echo(f"  DRY RUN - nothing was written. {n} sidecars would be "
+             f"({tally.get('new', 0)} new, {tally.get('changed', 0)} existing ones edited).")
+        if tally.get("not-raw"):
+            echo(f"  {tally['not-raw']} JPEG / DNG files would be skipped.")
+        echo("  No photograph is opened or changed either way. Add --apply to write them.")
+        return 0
+    _xmp_report(tally)
+    echo("  In Lightroom: import the folder, or select the photos and choose")
+    echo("  Metadata > Read Metadata from Files.")
+    return 1 if tally.get("failed") else 0
 
 
 def _discard_root(folder, cfg):
@@ -1298,15 +1408,19 @@ def cmd_poses(args):
 
 
 # ------------------------------------------------------------------------ quality
-def cmd_quality(args):
+def _sift_measure(args, idx, stacks):
+    """Look at every frame once and write down what was measured.
+
+    This is the slow half of Sift - previews, faces, focus - and the only half
+    that opens a photograph. What it writes to scores.json is measurement, not
+    judgement, so every later change of mind is free.
+    """
     from . import quality as Q
 
-    idx = _index(args)
-    stacks = idx.stacks[: args.limit] if args.limit else idx.stacks
     prev, _ = _previews_for(idx, stacks, args, "previews for quality check")
     if not prev:
         echo("No previews could be extracted, so there is nothing to judge.")
-        return 1
+        return None
 
     by_image = {}
     if not args.no_faces:
@@ -1347,6 +1461,70 @@ def cmd_quality(args):
     if rebuilt:
         echo(f"  ({rebuilt} previews had gone missing and were rebuilt)")
 
+    rows = [Q.to_row(s) for s in scores]
+
+    # Runs of near-identical frames, so the screen can offer the best of each
+    # instead of making him compare eleven of the same blink.
+    groups = {}
+    try:
+        from . import poses as P
+        from . import sessions as S
+
+        rule("similar frames")
+        pairs = S.read_times(stacks)
+        for g in P.group(pairs, prev):
+            if g.count >= 2:
+                for st in g.stacks:
+                    if st.primary:
+                        groups[st.primary.stem] = g.index
+        echo(f"  {len(set(groups.values()))} runs of similar frames")
+    except Exception as e:      # grouping is a nicety; Sift stands without it
+        echo(f"  (could not group similar frames: {e})")
+    for r in rows:
+        r["group"] = groups.get(r["base"])
+
+    cache = idx.root / CACHE
+    cache.mkdir(parents=True, exist_ok=True)
+    tmp = cache / (Q.SCORES_FILE + ".tmp")
+    tmp.write_text(json.dumps({
+        "version": Q.SCORES_VERSION,
+        "analysed": datetime.now().isoformat(timespec="seconds"),
+        "subject_face": args.subject_face,
+        "frames": sorted(rows, key=lambda r: r["base"]),
+    }, indent=1), encoding="utf-8")
+    tmp.replace(cache / Q.SCORES_FILE)
+    echo(f"  measurements: {cache / Q.SCORES_FILE}")
+    return rows
+
+
+def cmd_quality(args):
+    from . import quality as Q
+
+    idx = _index(args)
+    stacks = idx.stacks[: args.limit] if args.limit else idx.stacks
+    saved = Q.load_scores(idx.root)
+    if saved is not None and not args.from_cache and not args.fresh:
+        # Already looked at, and nothing new to look at: do not look again.
+        have = {r["base"] for r in saved["frames"]}
+        want = {s.primary.stem for s in stacks if s.primary}
+        if want <= have and saved.get("subject_face") == args.subject_face:
+            echo(f"  already measured ({saved.get('analysed', 'earlier')}), and no "
+                 "new frames since - judging from that.")
+            echo("  To look at every frame afresh:  --fresh")
+            args.from_cache = True
+    if args.from_cache:
+        # Judge again from what was measured last time: a second, not minutes.
+        if saved is None:
+            echo("This folder has not been sifted yet, so there is nothing to")
+            echo("judge again. Run it once without --from-cache.")
+            return 1
+        rows = saved["frames"]
+        echo(f"  judging {len(rows)} frames from the measurements already taken")
+    else:
+        rows = _sift_measure(args, idx, stacks)
+        if rows is None:
+            return 1
+
     if args.blur_ratio is None:
         from . import taste
         learned = taste.learned_blur_ratio()
@@ -1354,11 +1532,16 @@ def cmd_quality(args):
         if learned:
             echo(f"  softness bar {args.blur_ratio:.2f}x - learned from your "
                  f"{learned['votes']} thumbs up and down")
-    stats = Q.assess(
-        scores, blur_ratio=args.blur_ratio, eye_ratio=args.eye_ratio,
-        eye_abs=args.eye_abs, min_face_frac=args.eyes_min_face,
-        reject_ratio=args.reject_ratio,
-    )
+    overrides = Q.load_overrides(idx.root)
+    scores, stats = Q.judge(rows, {
+        "blur_ratio": args.blur_ratio, "eye_ratio": args.eye_ratio,
+        "eye_abs": args.eye_abs, "min_face_frac": args.eyes_min_face,
+        "reject_ratio": args.reject_ratio, "eye_soft": args.eye_soft,
+        "blown": args.blown, "black": args.black,
+    }, overrides, image_dir=previews.cache_dir_for(idx.root))
+    if overrides:
+        echo(f"  {sum(1 for s in scores if s.override)} frames carry your own call, "
+             "which stands over anything measured")
     ignored = sum(1 for s in scores if s.detected and not s.faces)
     if ignored:
         echo(f"  {ignored} frames had only background faces (under "
@@ -1416,16 +1599,9 @@ def cmd_quality(args):
     cache.mkdir(parents=True, exist_ok=True)
     (cache / "quality.json").write_text(json.dumps({
         "median_sharpness": stats["median_sharpness"],
-        "settings": {"blur_ratio": args.blur_ratio, "eye_ratio": args.eye_ratio},
-        "frames": [{
-            "base": s.base, "verdict": s.verdict, "blur_ratio": s.blur_ratio,
-            "sharpness": s.sharp, "faces": s.faces, "detected": s.detected,
-            "tier": s.tier, "main_face_frac": s.main_face_frac,
-            "ear": (None if not s.eyes_known else s.ear),
-            "mean_luma": s.mean_luma,
-            "face_sharp": s.face_sharp, "global_sharp": s.global_sharp,
-            "focus": [round(s.focus[0], 4), round(s.focus[1], 4)],
-        } for s in sorted(scores, key=lambda x: x.base)],
+        "settings": {"blur_ratio": args.blur_ratio, "eye_ratio": args.eye_ratio,
+                     "reject_ratio": args.reject_ratio, "eye_soft": args.eye_soft},
+        "frames": [Q.frame_out(s) for s in sorted(scores, key=lambda x: x.base)],
     }, indent=2), encoding="utf-8")
     echo(f"\n  scores: {cache / 'quality.json'}")
 
@@ -1712,9 +1888,32 @@ def build_parser():
                     help="then move the shoot folder, with what was not picked, "
                          "into _DESCARTABLES on the same drive")
     sp.add_argument("--discards", help="discards folder (default: <drive>\_DESCARTABLES)")
+    sp.add_argument("--stars", type=int, default=0, choices=range(0, 6),
+                    help="give the picks this many stars, in .xmp sidecars Lightroom reads")
+    sp.add_argument("--label", help="and this colour label (red, yellow, green, blue, purple)")
+    sp.add_argument("--label-lang", default="en", choices=["en", "es"],
+                    help="the language your Lightroom is in - label names are translated")
     sp.add_argument("-v", "--verbose", action="store_true")
     sp.add_argument("--apply", action="store_true")
     sp.set_defaults(func=cmd_work)
+
+    sp = sub.add_parser("xmp", help="write Sift's verdicts as stars and colour labels "
+                                    "for Lightroom")
+    sp.add_argument("folder")
+    sp.add_argument("-r", "--recursive", action="store_true")
+    sp.add_argument("--stars", type=int, default=0, choices=range(0, 6),
+                    help="stars for the frames Sift kept (default: none)")
+    sp.add_argument("--keep-label", default="green")
+    sp.add_argument("--review-label", default="yellow")
+    sp.add_argument("--reject-label", default="red")
+    sp.add_argument("--reject-rating", action="store_true",
+                    help="also rate rejects -1, which Bridge shows as Reject")
+    sp.add_argument("--label-lang", default="en", choices=["en", "es"])
+    for flag in ("--blur-ratio", "--eye-ratio", "--reject-ratio", "--eye-soft",
+                 "--blown", "--black"):
+        sp.add_argument(flag, type=float, default=None)
+    sp.add_argument("--apply", action="store_true")
+    sp.set_defaults(func=cmd_xmp)
 
     sp = sub.add_parser("config", help="set the archive and working folders once")
     sp.add_argument("--archive-root")
@@ -1789,6 +1988,18 @@ def build_parser():
                     help="flag frames below this fraction of the shoot's median "
                          "sharpness (default: learned from your thumbs up and "
                          "down, 0.65 until there are enough; lower = more forgiving)")
+    sp.add_argument("--from-cache", action="store_true",
+                    help="judge again from the measurements already taken "
+                         "(scores.json) instead of analysing every frame")
+    sp.add_argument("--fresh", action="store_true",
+                    help="measure every frame again even though it was done before")
+    sp.add_argument("--blown", type=float, default=None,
+                    help="fraction of the frame clipped white that counts as blown")
+    sp.add_argument("--black", type=float, default=None,
+                    help="fraction of the frame clipped black that counts as lost")
+    sp.add_argument("--eye-soft", type=float, default=0.35,
+                    help="eyes softer than this fraction of the shoot's median "
+                         "are flagged 'eyes soft' (default 0.35)")
     sp.add_argument("--eye-ratio", type=float, default=0.55,
                     help="flag eyes below this fraction of the shoot's median "
                          "eye openness (default 0.55; lower = more forgiving)")
