@@ -947,6 +947,10 @@ def cmd_shoots(args):
             echo(f"  {mins:>5} min   after {a.base} -> {b.base}{mark}")
 
     cache = Path(args.cache) if args.cache else previews.cache_dir_for(idx.root)
+    if not args.by_scene:
+        shoots, how = _shoots_by_subject(args, idx, pairs, cache)
+        return _shoots_report(args, idx, shoots, how, cache)
+
     sigs = {}
     if not args.no_scene:
         rule("looking at what changes on screen")
@@ -974,7 +978,57 @@ def cmd_shoots(args):
 
     folded = f"  (folded back from {raw_count} by who is in them)" \
         if len(shoots) != raw_count else ""
-    rule(f"{len(shoots)} shoot(s) detected  ({how}){folded}")
+    return _shoots_report(args, idx, shoots, how + folded, cache)
+
+
+def _shoots_by_subject(args, idx, pairs, cache):
+    """Cut where the person in front of the camera changes, not the wall."""
+    from . import sessions as S
+
+    faces_by_base, backend_name = None, "insightface"
+    if not args.no_faces:
+        picks = S.sample_for_identity(pairs, medium_minutes=args.gap_medium)
+        rule(f"finding who is in front of the camera: {len(picks)} frames")
+        try:
+            faces_by_base, backend_name = S.find_subjects(
+                picks, cache, long_side=args.long_side,
+                on_msg=lambda m: echo(f"  {m}"),
+                on_progress=lambda i, n: echo(f"  {i}/{n}"))
+        except Exception as exc:
+            # A stop is not an Exception (see server.Cancelled), so it passes
+            # straight through here and ends the job as it should.
+            echo(f"  (could not look at faces: {exc})")
+            echo("  splitting on pauses alone instead")
+            faces_by_base = None
+
+    shoots = S.split_by_subject(
+        pairs, faces_by_base, backend_name=backend_name,
+        medium_minutes=args.gap_medium, big_minutes=args.gap,
+        min_frames=args.min_frames)
+    if faces_by_base is None:
+        how = f"a pause of {min(args.gap, S.DEFAULT_BLIND_MIN)} min or more"
+    else:
+        how = (f"a new person after a {args.gap_medium} min pause, "
+               f"or any pause of {args.gap} min")
+    return shoots, how
+
+
+def _shoots_report(args, idx, shoots, how, cache):
+    """Print the proposal, write it down, and say what to do next."""
+    from . import sessions as S
+
+    rule(f"{len(shoots)} shoot(s) detected  ({how})")
+
+    # The frames the app shows beside each proposal. Made here, at the one
+    # standard size, so the strip is never a row of broken pictures.
+    for sh in shoots:
+        picks = S._spread(sh.stacks, 8)
+        try:
+            res = previews.extract_many([s.primary for s in picks if s.primary],
+                                        cache, long_side=args.long_side)
+            sh.sample = [r.out for r in res if r.ok]
+        except Exception:
+            pass
 
     for sh in shoots:
         if not sh.name:
@@ -989,11 +1043,16 @@ def cmd_shoots(args):
         echo(f"       people: {who}")
         if sh.camera:
             echo(f"       camera: {sh.camera}")
+        if sh.cut:
+            echo(f"       starts here because: {sh.cut.get('text', '')}")
+        for note in sh.joined:
+            echo(f"       {note}")
 
     out_dir = idx.root / CACHE / "shoots"
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "root": str(idx.root), "gap_minutes": args.gap,
+        "gap_medium_minutes": args.gap_medium,
         "shoots": [{
             "index": sh.index, "suggested_name": sh.name, "count": sh.count,
             "frames": sh.frames,
@@ -1001,6 +1060,10 @@ def cmd_shoots(args):
             "end": sh.end.isoformat() if sh.end else None,
             "people": sh.people, "camera": sh.camera,
             "bases": [s.base for s in sh.stacks],
+            # Why it starts where it does, the pauses it was kept together
+            # across, and which frames have a picture ready to show.
+            "cut": sh.cut, "joined": sh.joined,
+            "sample": [Path(p).stem for p in sh.sample],
         } for sh in shoots],
     }
     (out_dir / "shoots.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -1661,8 +1724,15 @@ def build_parser():
 
     sp = sub.add_parser("shoots", help="how many separate photoshoots are in here")
     common(sp)
-    sp.add_argument("--gap", type=int, default=45,
-                    help="minutes of silence that mean a new shoot (default 45)")
+    sp.add_argument("--gap", type=int, default=90,
+                    help="a pause this long is a new shoot whoever is in it "
+                         "(minutes, default 90)")
+    sp.add_argument("--gap-medium", type=int, default=10,
+                    help="a pause this long is a new shoot only if the person "
+                         "changed too (minutes, default 10)")
+    sp.add_argument("--by-scene", action="store_true",
+                    help="the old way: cut where the picture changes "
+                         "(sensitive to the background)")
     sp.add_argument("--min-frames", type=int, default=5,
                     help="fewer frames than this get folded into the run before")
     sp.add_argument("--scene", type=float, default=0.42,

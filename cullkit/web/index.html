@@ -405,6 +405,13 @@ input[type=text]{font:400 14px "IBM Plex Sans",sans-serif;padding:9px 12px;
 .strip img{height:104px;width:auto;border-radius:4px;background:var(--sunk);flex:none}
 .shoot{border:1px solid var(--rule);border-radius:10px;padding:13px 15px;
   margin-bottom:11px;background:var(--card);box-shadow:var(--shadow)}
+.shoot-why{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;margin-top:10px;
+  font-size:13px;line-height:1.45;color:var(--ink)}
+.shoot-why .muted{flex:1 1 100%;font-size:12.5px}
+.shoot-why .shoot-join{margin-left:auto;min-height:36px;padding:8px 13px;font-size:12.5px}
+.shoot.joined{border-style:dashed;border-color:var(--accent);margin-top:-6px}
+.shoot.joined .shoot-name{opacity:.6}
+.shoot.joined .shoot-merge{display:none}
 .shoot-merge{font:400 13px "IBM Plex Sans",sans-serif;padding:8px 10px;
   border-radius:8px;border:1px solid var(--rule-2);background:var(--paper);
   color:var(--ink-2);max-width:200px;flex:0 1 auto}
@@ -2798,7 +2805,7 @@ body:has(#dev-viewer:not(.hide)) #yt-dock{bottom:calc(120px + env(safe-area-inse
     <div id="pick-shoot"></div>
     <div class="row" style="margin-top:12px">
       <button class="act" id="sh-run">Find the projects</button>
-      <span class="muted" style="font-size:13px">Reads capture times and what changes on screen.</span>
+      <span class="muted" style="font-size:13px">Reads capture times and who is in front of the camera.</span>
     </div>
     <pre class="log hide" id="sh-log" data-name="Separate Projects" data-result="#sh-result"></pre>
   </div>
@@ -3683,6 +3690,7 @@ const PHASE_NAMES = [
   [/^previews/i, 'Pulling the JPEGs hidden inside your RAWs'],
   [/^reading capture times/i, 'Reading when each frame was shot'],
   [/^looking at what changes/i, 'Watching what changes on screen'],
+  [/^finding who is in front/i, 'Seeing who is in front of the camera'],
   [/^grouping by who is in/i, 'Working out who is in each group'],
   [/^faces/i, 'Looking for faces'],
   [/^scoring/i, 'Judging every frame'],
@@ -6581,8 +6589,10 @@ async function showShoots(folder, into) {
   const head = el('div', 'card');
   head.appendChild(el('h2', '', `${d.shoots.length} found — check, name, then create`));
   head.appendChild(el('div', 'muted',
-    'Two groups become one folder the moment they share a name — pick ' +
-    '"Merge into" below to copy one across rather than retyping it.'));
+    'Split where the person in front of the camera changes, or after a very ' +
+    'long pause — never because the background did. Each one says why it ' +
+    'starts where it does. If two are really one, press "Same shoot as the ' +
+    'one above".'));
   host.appendChild(head);
 
   // Every name input, keyed by index, so a merge picker can read another
@@ -6611,15 +6621,68 @@ async function showShoots(folder, into) {
     top.appendChild(merge);
     c.appendChild(top);
 
-    const strip = el('div', 'strip');
-    const step = Math.max(1, Math.floor(sh.bases.length / 8));
-    for (let i = 0; i < sh.bases.length && strip.children.length < 8; i += step) {
-      const img = el('img'); img.loading = 'lazy';
-      img.src = '/api/thumb?size=220&path=' +
-        encodeURIComponent(folder + '\\_cullkit\\previews\\' + sh.bases[i] + '.jpg');
-      strip.appendChild(img);
+    /* Why this one starts where it does, in the program's own words, and the
+       pauses inside it that were looked at and left alone. Without this a
+       split is a number to be trusted; with it, it is a claim you can check
+       against what you remember of the day. */
+    const why = el('div', 'shoot-why');
+    if (sh.cut && sh.cut.text) {
+      const chip = el('span', 'chip ' + (sh.cut.reason === 'subject' ? 'c-rev' : 'c-card'),
+        sh.cut.reason === 'subject' ? 'new person' : 'long pause');
+      why.appendChild(chip);
+      why.appendChild(el('span', '', 'Starts here because: ' + sh.cut.text + '.'));
     }
+    (sh.joined || []).forEach(note => why.appendChild(el('span', 'muted', note)));
+    /* One press, for the commonest correction: these two are one shoot. It
+       does what the picker beside it does - gives this group the name of the
+       one above, and two groups with one name become one folder - and a
+       second press takes it back. */
+    if (sh.index > 1) {
+      const join = el('button', 'act ghost shoot-join', 'Same shoot as the one above');
+      join.dataset.idx = sh.index;
+      join.onclick = () => {
+        const mine = nameInputs[sh.index], above = nameInputs[sh.index - 1];
+        if (c.classList.contains('joined')) {
+          mine.value = mine.dataset.own;
+        } else {
+          mine.dataset.own = mine.value;
+          mine.value = above.value;
+        }
+        const on = c.classList.toggle('joined');
+        join.textContent = on ? 'Merged with the one above — split again'
+                              : 'Same shoot as the one above';
+        mine.readOnly = on;
+      };
+      why.appendChild(join);
+    }
+    if (why.children.length) c.appendChild(why);
+
+    // The frames the proposal made pictures of, when it says which; an older
+    // proposal does not, and gets the evenly spaced guess it always had.
+    const strip = el('div', 'strip');
+    let show = sh.sample && sh.sample.length ? sh.sample : null;
+    if (!show) {
+      show = [];
+      const step = Math.max(1, Math.floor(sh.bases.length / 8));
+      for (let i = 0; i < sh.bases.length && show.length < 8; i += step) show.push(sh.bases[i]);
+    }
+    const cacheDir = pjoin(pjoin(folder, '_cullkit'), 'previews');
+    show.slice(0, 8).forEach(base => {
+      const img = el('img'); img.loading = 'lazy';
+      img.onerror = () => img.remove();
+      img.src = '/api/thumb?size=220&path=' + encodeURIComponent(pjoin(cacheDir, base + '.jpg'));
+      strip.appendChild(img);
+    });
     c.appendChild(strip); host.appendChild(c);
+  });
+  // A group merged upward follows the name above it, so renaming the one
+  // above after merging does not quietly split them again.
+  host.addEventListener('input', e => {
+    if (!e.target.classList || !e.target.classList.contains('shoot-name')) return;
+    let i = +e.target.dataset.idx + 1;
+    while (nameInputs[i] && nameInputs[i].closest('.shoot').classList.contains('joined')) {
+      nameInputs[i].value = e.target.value; i++;
+    }
   });
 
   // Now that every name exists, give each picker every *other* group to

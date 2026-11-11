@@ -28,7 +28,7 @@ Run the whole thing start to finish, or any one step by itself.
 | step | what happens |
 |---|---|
 | **Import & Verify** | Copies a card or a folder and checksums every file against the original. The card is only ever read. When the report says every file matched, it is safe to reformat in camera. |
-| **Separate Projects** | One card often holds several shoots. It reads capture times *and* what changes in the picture, proposes where they divide, and — once you confirm and name them — gives each its own folder. |
+| **Separate Projects** | One card often holds several shoots. It reads capture times and *who is in front of the camera*: a new person after a pause is a new shoot, the same person against a different backdrop is not. It says why it cut where it did, and — once you confirm and name them — gives each its own folder. |
 | **Sift** | Judges focus on the face, not the frame, so shallow depth of field is not mistaken for a miss. Soft, blinked and ruined frames are moved to a review folder for your call. |
 
 ### Darkroom (red) — choose

@@ -32,6 +32,11 @@ class Shoot:
     people: list = field(default_factory=list)
     name: str = ""
     sample: list = field(default_factory=list)   # preview paths for review
+    # Why this shoot begins where it does - {"reason": "time" | "subject",
+    # "gap_minutes", "text"} - and the pauses inside it that were looked at
+    # and deliberately not cut. Empty on the first shoot and on the old path.
+    cut: dict = field(default_factory=dict)
+    joined: list = field(default_factory=list)
 
     @property
     def count(self):
@@ -331,6 +336,254 @@ def merge_by_people(shoots, cache_dir, gap_minutes=DEFAULT_GAP_MIN, backend=None
         sh.index = i
         sh.people = sorted(kept[i - 1])
     return merged
+
+
+# =====================================================================
+# Separating by subject (2026-11-11)
+# =====================================================================
+# Everything above this line cuts where the *picture* changes: a colour
+# fingerprint of the whole frame, which is mostly background. So one client
+# walking from a white wall to a brick one came back as two shoots, and the
+# people pass that follows could only glue some of them together again.
+#
+# This asks the question the photographer is actually asking - is it still
+# the same person in front of the camera - and asks it only where a cut could
+# go at all: at a pause. A session is never cut in the middle of continuous
+# shooting, whatever the wall behind does.
+#
+#   pause shorter than `medium`             never a cut
+#   pause of `medium` or more, same subject  one session
+#   pause of `medium` or more, new subject   a new session   (reason: subject)
+#   pause of `big` or more                   a new session   (reason: time)
+#
+# The old way is still here, behind `cull shoots --by-scene`.
+DEFAULT_MEDIUM_MIN = 10
+DEFAULT_BIG_MIN = 90
+# Without faces to go on, a pause has to speak for itself. This is the
+# number the program used for that from the beginning.
+DEFAULT_BLIND_MIN = 45
+SUBJECT_MIN_FRAC = 0.0035     # a face smaller than this is somebody in the background
+SUBJECT_MIN_SCORE = 0.60      # a detection weaker than this is not counted at all
+CO_SUBJECT_RATIO = 0.35       # a second face this big next to the largest is a subject too
+PER_ATOM = 12                 # frames looked at in each stretch of continuous shooting
+
+
+def subject_faces(faces, subject_min=SUBJECT_MIN_FRAC, min_score=SUBJECT_MIN_SCORE,
+                  co_ratio=CO_SUBJECT_RATIO):
+    """The faces in one frame that are who the picture is of.
+
+    The largest confident face, and any other of comparable size - a couple,
+    a group. Someone small at the back of the room is not a subject however
+    sharp the detector thinks they are, and a weak detection is not anybody.
+    """
+    ok = [f for f in faces or []
+          if f.score >= min_score and f.area_frac >= subject_min]
+    if not ok:
+        return []
+    biggest = max(f.area_frac for f in ok)
+    return [f for f in ok if f.area_frac >= co_ratio * biggest]
+
+
+def _atoms(pairs, medium):
+    """Stretches of continuous shooting: split wherever the camera paused."""
+    out = [[pairs[0]]]
+    for prev, cur in zip(pairs, pairs[1:]):
+        if cur[1]["taken"] - prev[1]["taken"] >= medium:
+            out.append([cur])
+        else:
+            out[-1].append(cur)
+    return out
+
+
+def _pause_text(td):
+    mins = int(td.total_seconds() // 60)
+    if mins < 60:
+        return f"{mins} min"
+    return f"{mins // 60} h {mins % 60:02d} min" if mins % 60 else f"{mins // 60} h"
+
+
+def split_by_subject(pairs, faces_by_base, backend_name="insightface",
+                     medium_minutes=DEFAULT_MEDIUM_MIN, big_minutes=DEFAULT_BIG_MIN,
+                     blind_minutes=DEFAULT_BLIND_MIN, min_frames=MIN_FRAMES,
+                     threshold=None):
+    """Cut a card into sessions by who is in front of the camera.
+
+    `pairs` is [(stack, exif)]. `faces_by_base` maps a frame's base name to
+    the faces found in it, for whichever frames were looked at - it does not
+    have to be all of them, and a frame that is missing is simply a frame
+    nobody looked at. Pass None when there are no faces to go on at all, and
+    the split falls back to pauses alone.
+
+    Returns Shoot objects. Each carries `cut` - why it starts where it does -
+    and `joined`, the pauses it was deliberately *not* cut at.
+    """
+    from collections import Counter
+
+    from . import faces as F
+
+    if not pairs:
+        return []
+    pairs = sorted(pairs, key=lambda t: t[1]["taken"])
+    blind = faces_by_base is None
+    medium = timedelta(minutes=blind_minutes if blind else medium_minutes)
+    big = timedelta(minutes=min(big_minutes, blind_minutes) if blind else big_minutes)
+    atoms = _atoms(pairs, medium)
+    gaps = [atoms[i][0][1]["taken"] - atoms[i - 1][-1][1]["taken"]
+            for i in range(1, len(atoms))]          # gaps[i-1] sits before atom i
+
+    # ---- who is in each stretch ----
+    # Every subject face on the card goes into one clustering, so "the same
+    # person" means the same thing in the first stretch and the last.
+    pool = []                                       # (atom index, base, face)
+    if not blind:
+        for ai, atom in enumerate(atoms):
+            for st, _ in atom:
+                for f in subject_faces(faces_by_base.get(st.base)):
+                    pool.append((ai, st.base, f))
+    names = {}
+    if pool:
+        groups = F.cluster([f for _, _, f in pool], threshold=threshold,
+                           backend_name=backend_name)
+        try:
+            groups = F.name_from_library(groups, backend_name)
+        except Exception:
+            pass
+        for g in groups:
+            for f in g.faces:
+                names[id(f)] = g.name
+
+    subjects = [Counter() for _ in atoms]           # person -> frames they are in
+    for ai, atom in enumerate(atoms):
+        seen = {}                                   # base -> people in that frame
+        for a, base, f in pool:
+            if a == ai:
+                seen.setdefault(base, set()).add(names[id(f)])
+        tally = Counter(p for people in seen.values() for p in people)
+        # Sustained, not a single frame: somebody who walks through one
+        # picture is not who the stretch is of. A stretch with only a frame
+        # or two looked at has to take what it can get.
+        need = 2 if len(seen) >= 3 else 1
+        subjects[ai] = Counter({p: n for p, n in tally.items() if n >= need})
+
+    # ---- where to cut ----
+    cuts = {}                                       # atom index it starts at -> why
+    joined = {}                                     # atom index -> note on a pause kept
+    blocks, start = [], 0
+    for i, g in enumerate(gaps, 1):
+        if g >= big:
+            cuts[i] = {"reason": "time", "gap_minutes": int(g.total_seconds() // 60),
+                       "text": f"{_pause_text(g)} with no photos"}
+            blocks.append((start, i))
+            start = i
+    blocks.append((start, len(atoms)))
+
+    for lo, hi in blocks:
+        faced = [i for i in range(lo, hi) if subjects[i]]
+        if not faced:
+            continue                                # nobody to tell apart: one session
+        session = Counter(subjects[faced[0]])
+        for p, q in zip(faced, faced[1:]):
+            mine, theirs = subjects[q], session
+            main_here = mine.most_common(1)[0][0]
+            main_there = theirs.most_common(1)[0][0]
+            same = main_here in theirs or main_there in mine
+            # The widest pause between the two is where a cut would go. Any
+            # stretch with nobody in it - a detail, the room - stays with
+            # whichever side it is closer to in time.
+            at = max(range(p + 1, q + 1), key=lambda i: gaps[i - 1])
+            g = gaps[at - 1]
+            if same:
+                session.update(mine)
+                who = main_here if not main_here.startswith("person_") else "the same person"
+                joined[at] = (f"kept together across a {_pause_text(g)} pause"
+                              f" - {who} carries on")
+            else:
+                cuts[at] = {"reason": "subject",
+                            "gap_minutes": int(g.total_seconds() // 60),
+                            "text": f"a different person after a {_pause_text(g)} pause"}
+                session = Counter(mine)
+
+    # ---- build ----
+    bounds = sorted(cuts)
+    spans = list(zip([0] + bounds, bounds + [len(atoms)]))
+    groups = []
+    for a, b in spans:
+        frames = [pr for atom in atoms[a:b] for pr in atom]
+        who = Counter()
+        for i in range(a, b):
+            who.update(subjects[i])
+        notes = [joined[i] for i in range(a + 1, b) if i in joined]
+        groups.append({"frames": frames, "who": who, "cut": cuts.get(a, {}),
+                       "joined": notes})
+
+    # A handful of stray frames is not a shoot; fold them into the run before.
+    merged = []
+    for g in groups:
+        if merged and len(g["frames"]) < min_frames:
+            merged[-1]["frames"].extend(g["frames"])
+            merged[-1]["who"].update(g["who"])
+            merged[-1]["joined"].extend(g["joined"])
+        else:
+            merged.append(g)
+
+    shoots = []
+    for i, g in enumerate(merged, 1):
+        fr = g["frames"]
+        sh = Shoot(index=i, stacks=[p[0] for p in fr])
+        sh.start, sh.end = fr[0][1]["taken"], fr[-1][1]["taken"]
+        cams = {camera_label(p[1]) for p in fr if p[1].get("make") or p[1].get("model")}
+        sh.camera = ", ".join(sorted(cams)) if cams else ""
+        sh.people = [p for p, _ in g["who"].most_common()]
+        sh.cut = dict(g["cut"]) if i > 1 else {}
+        sh.joined = list(g["joined"])
+        shoots.append(sh)
+    return shoots
+
+
+def sample_for_identity(pairs, medium_minutes=DEFAULT_MEDIUM_MIN, per_atom=PER_ATOM):
+    """The frames worth looking at to know who each stretch is of.
+
+    A dozen spread across every stretch of continuous shooting, however long
+    it is. A three-thousand-frame card is still only a few hundred frames to
+    look at, which on a small laptop is the difference between a minute and
+    the length of a lunch.
+    """
+    if not pairs:
+        return []
+    pairs = sorted(pairs, key=lambda t: t[1]["taken"])
+    out = []
+    for atom in _atoms(pairs, timedelta(minutes=medium_minutes)):
+        out.extend(st for st, _ in _spread(atom, per_atom))
+    return out
+
+
+def find_subjects(stacks, cache_dir, backend=None, long_side=P_DEFAULT_LONG_SIDE,
+                  on_msg=None, on_progress=None):
+    """Look at these frames and say who is in each. -> ({base: [Face]}, backend name)
+
+    Reads the main preview cache at its one standard size, like everything
+    else that looks at faces; nothing here writes a smaller picture anywhere.
+    """
+    from . import faces as F
+    from . import previews as P
+
+    if backend is None:
+        backend = F.get_backend(on_msg=on_msg)
+    srcs = [s.primary for s in stacks if s.primary]
+    res = P.extract_many(srcs, Path(cache_dir), long_side=long_side)
+    paths = [r.out for r in res if r.ok]
+    state = {"n": 0}
+
+    def step(_path, _n):
+        state["n"] += 1
+        if on_progress and (state["n"] % 10 == 0 or state["n"] == len(paths)):
+            on_progress(state["n"], len(paths))
+
+    found = F.analyse_previews(paths, backend, on_step=step)
+    by_base = {Path(p).stem: [] for p in paths}
+    for f in found:
+        by_base.setdefault(Path(f.image).stem, []).append(f)
+    return by_base, backend.name
 
 
 def _spread(items, n):

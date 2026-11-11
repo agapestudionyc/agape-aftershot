@@ -97,8 +97,15 @@ class _InsightBackend:
         with contextlib.redirect_stdout(buf):
             from insightface.app import FaceAnalysis
 
+            # Three of the five models in the pack, because three are all
+            # that is ever read: where the faces are, who they are, and the
+            # 106 points the eyes are measured from. The other two - a 3D
+            # mesh and an age/sex guess - were loaded and run on every face
+            # and never looked at, which on a laptop with 8 GB is 145 MB of
+            # memory and a share of every second for nothing.
             self.app = FaceAnalysis(
-                name="buffalo_l", providers=["CPUExecutionProvider"]
+                name="buffalo_l", providers=["CPUExecutionProvider"],
+                allowed_modules=["detection", "recognition", "landmark_2d_106"],
             )
             self.app.prepare(ctx_id=-1, det_size=(det_size, det_size))
 
