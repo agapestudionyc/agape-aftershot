@@ -64,7 +64,7 @@ class TestHomeScreenShortcuts(unittest.TestCase):
 
     def test_a_shortcut_never_walks_over_work(self):
         start = self.src.index("function launchShortcut(which)")
-        body = self.src[start:start + 500]
+        body = self.src[start:start + 700]
         self.assertRegex(body, r"if \(FLOW\.on \|\| BUSY > 0 \|\|")
         self.assertLess(body.index("return false"), body.index("devEnter("))
 
@@ -128,7 +128,7 @@ class TestTheSecondSkin(unittest.TestCase):
 
     def test_a_darkroom_just_opened_is_not_reported_closed(self):
         a = self.src.index("function noticeTheDarkroomClosed()")
-        body = self.src[a:a + 1400]
+        body = self.src[a:a + 2600]
         self.assertIn("if (DEV.opening ||", body)
         self.assertLess(body.index("if (DEV.opening ||"), body.index("DEV.folder = ''"))
 

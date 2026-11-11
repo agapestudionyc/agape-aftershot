@@ -1931,6 +1931,8 @@ body:has(#dev-viewer:not(.hide)) #yt-dock{bottom:calc(120px + env(safe-area-inse
   background:var(--paper);color:var(--ink);font:400 13.5px "IBM Plex Sans",sans-serif}
 .yt-res{margin-top:8px;max-height:320px;overflow:auto}
 .yt-res .trk img{width:38px;height:38px;border-radius:7px;object-fit:cover;flex:none;background:var(--sunk)}
+.yt-res .act.on{color:var(--go,#3dff87);border-color:currentColor}
+.yt-count{font-size:12px;margin:8px 0 2px}
 .yt-res .trk small{display:block;color:var(--ink-3);font-size:12px}
 
 /* ---------- the Vibes panel ----------
@@ -3073,6 +3075,7 @@ function playFile(kind, {loop = false, fadeIn = 1.2, onEnd = null,
   }, step * 1000);
   let downTimer = 0;
   const fadeOut = (secs = 2.2) => {
+    a.dataset.stopped = '1';      // emptying the source below is not a failure
     clearInterval(up); clearInterval(downTimer);
     downTimer = setInterval(() => {
       a.volume = Math.max(0, a.volume - 0.75 * step / secs);
@@ -3080,6 +3083,30 @@ function playFile(kind, {loop = false, fadeIn = 1.2, onEnd = null,
     }, step * 1000);
   };
   if (onEnd) a.addEventListener('ended', onEnd, {once: true});
+  if (String(track.url).startsWith(YT_AUDIO)) {
+    // The first time a song is played the computer may still be fetching it.
+    const slow = setTimeout(() => {
+      if (a.readyState < 2 && !a.error) flash('getting this song — a few seconds, the first time only', 6000);
+    }, 1500);
+    a.addEventListener('playing', () => { clearTimeout(slow); YT_FAILS = 0; }, {once: true});
+    /* A song that cannot be fetched never plays and never ends, so nothing
+       ever asked for the next one: the vibe sat there silent with the buttons
+       lit. Now it says so and moves on - three in a row and it stops trying,
+       because that is the connection or yt-dlp, not the songs. */
+    a.addEventListener('error', () => {
+      clearTimeout(slow);
+      if (a.dataset.stopped || a.dataset.dead) return;
+      a.dataset.dead = '1';
+      logEvent('ui.yt-audio-failed', {track: track.name, fails: YT_FAILS + 1});
+      if (++YT_FAILS >= 3) {
+        YT_FAILS = 0;
+        flash('YouTube songs are not coming through — check the internet on the computer.', 8000);
+        return;
+      }
+      flash('could not get “' + track.name + '” — skipping it', 5000);
+      if (onEnd) setTimeout(onEnd, 800);
+    }, {once: true});
+  }
   return {stop: fadeOut, el: a};
 }
 
@@ -3093,6 +3120,7 @@ function playFile(kind, {loop = false, fadeIn = 1.2, onEnd = null,
    vibe button, the transport and the playlist chain never learn there are
    two kinds of track. */
 let YT_API = null, YT_PLAYER = null, YT_END = null, YT_PAUSED = false;
+var YT_FAILS = 0;         // fetched tracks that failed in a row (see playFile)
 function ytApi() {
   if (YT_API) return YT_API;
   YT_API = new Promise((res, rej) => {
@@ -5062,9 +5090,9 @@ $('#resume-no').onclick = () => {
    somewhere else, and echoing it would only start an argument between the two
    devices about who shut the door. */
 function noticeTheDarkroomClosed() {
-  if (!DEV.folder) return;
+  if (!DEV.folder) { DEV.goneSince = 0; return; }
   if (STATE.darkroom === undefined) return;      // an older server; say nothing
-  if (STATE.darkroom) return;                    // still open
+  if (STATE.darkroom) { DEV.goneSince = 0; return; }     // still open
   /* "No darkroom" is only news if the computer had already been told there
      was one. Open a folder while a poll is in the air and that poll answers
      from before the door opened - which threw you straight back out to Home
@@ -5072,6 +5100,20 @@ function noticeTheDarkroomClosed() {
      word is not believed while the opening is still being sent, nor for a
      few seconds after: long enough for any answer older than it to land. */
   if (DEV.opening || Date.now() - (DEV.openedAt || 0) < 4000) return;
+  /* And it is not believed the first time it is said, either. Being thrown out
+     of the darkroom mid-pick costs somebody their place; waiting three seconds
+     to step out of a room that really was closed costs nothing. One answer
+     saying "closed" was, twenty-one times, the computer failing to read its
+     own note for an instant. So it has to be said twice, seconds apart. */
+  if (!DEV.goneSince) {
+    DEV.goneSince = Date.now();
+    setTimeout(loadState, 3200);
+    return;
+  }
+  if (Date.now() - DEV.goneSince < 3000) return;
+  DEV.goneSince = 0;
+  clearTimeout(whereTimer);     // or it saves "no folder" two seconds from now
+  logEvent('ui.darkroom-closed-elsewhere', {folder: DEV.folder});
   const name = DEV.folder.split(/[\\/]/).pop();
   DEV.folder = ''; DEV.mode = ''; DEV.groups = null;
   DEV.picked = new Set(); DEV.skipped = new Set();
@@ -5095,9 +5137,20 @@ function noticeTheDarkroomClosed() {
 
    Only when this device is not the one still working: a run this page started
    and is mid-stage on is not something to tear down from underneath it. */
+let RUN_GONE_SINCE = 0;
 function noticeTheRunEnded() {
-  if (!FLOW.on || BUSY > 0) return;
-  if (STATE.run_active !== false) return;      // undefined means an older server
+  if (!FLOW.on || BUSY > 0) { RUN_GONE_SINCE = 0; return; }
+  // undefined means an older server
+  if (STATE.run_active !== false) { RUN_GONE_SINCE = 0; return; }
+  // Said twice, seconds apart, before it is believed - as with the darkroom.
+  if (!RUN_GONE_SINCE) {
+    RUN_GONE_SINCE = Date.now();
+    setTimeout(loadState, 3200);
+    return;
+  }
+  if (Date.now() - RUN_GONE_SINCE < 3000) return;
+  RUN_GONE_SINCE = 0;
+  logEvent('ui.run-ended-elsewhere', {at: FLOW.at});
   FLOW.on = false; FLOW.at = -1; FLOW.dest = '';
   FLOW.folders = []; FLOW.fi = 0; FLOW.ready = false;
   stage().innerHTML = '';
@@ -5466,9 +5519,15 @@ window.addEventListener('focus', () => pickedUp('focused'));
    real handover: the other device was standing there within the last fifteen
    minutes. Opening the app cold, hours later, still offers rather than goes. */
 const HANDOVER_FRESH = 15 * 60;
-async function followHandover(taking) {
+async function followHandover(taking, own) {
   const s = STATE.screen || {};
-  if (!s.view || s.device === DEVICE_ID || s.seconds_ago > HANDOVER_FRESH) return false;
+  /* `own` is this same device arriving on a page that has only just loaded -
+     the phone took the app out of memory while it was in a pocket, or the page
+     was refreshed. The screen it was standing on a minute ago is as much a
+     handover as one from the laptop: the page that knew where it was is gone.
+     A page that is still alive is already where it was, and is left alone. */
+  if (!s.view || s.seconds_ago > HANDOVER_FRESH) return false;
+  if (s.device === DEVICE_ID && !own) return false;
   if (FLOW.on) return false;                       // the run decides its own screen
   const live = (STATE.running || []).find(j => !j.stopping);
   if (live) {
@@ -7797,6 +7856,7 @@ window.addEventListener('pagehide', () => {
 
 function saveSelection() {
   clearTimeout(whereTimer);
+  if (!DEV.folder) return;      // left the darkroom while the timer was running
   fetch('/api/selection', {method: 'POST',
     headers: {'Content-Type': 'application/json'},
     // Where you are, as well as what you chose. Without the position, picking
@@ -8932,26 +8992,58 @@ let VIBE_MAX = 4;
 let VIBE_CONVERTER = true;
 let VIBES_FAILED = false;  // the last attempt could not reach the computer
 
-async function loadVibes() {
-  try {
-    const d = await (await fetch('/api/vibes', {cache: 'no-store'})).json();
-    VIBE_DEFS = d.vibes || [];
-    VIBE_MAX = d.max || 4;
-    VIBE_CONVERTER = d.converter !== false;
-    VIBES_FAILED = false;
-  } catch (e) {
-    // Deliberately does NOT clear VIBE_DEFS on a failed refresh. It used to,
-    // and that is how a page open at the exact second the computer restarted
-    // ended up stuck saying "no vibes yet" - one bad fetch overwrote a good
-    // answer with an empty one, and nothing ever asked again. Keep whatever
-    // was last known good; the regular poll retries this on its own.
-    VIBES_FAILED = true;
-  }
+/* Changes to a vibe's songs are made on the page first and sent after.
+
+   Adding one song used to be three round trips in a row - save everything,
+   fetch everything back, redraw the whole panel - with the button dead until
+   the last one landed. Over the tunnel from a phone that is two or three
+   seconds per song, and ten songs is half a minute of waiting on a list. And
+   the redraw threw away the search you were adding from.
+
+   So the list changes at once, the button answers at once, and one save at a
+   time carries it to the computer behind you. Taps made while a save is in the
+   air are not lost: the save runs again with whatever the list has become. */
+let VIBE_SAVING = null, VIBE_DIRTY = false;
+/* A YouTube track is played one of two ways, and the computer says which.
+
+   With yt-dlp installed there, the audio is fetched once and kept, and the
+   track is an ordinary file for the app's own player: no video, no little
+   window, and it carries on with the phone locked. Without it, the track goes
+   to YouTube's embedded player as before. Everything that makes a track goes
+   through here so there is one answer. */
+let VIBE_YTDL = false;
+const YT_AUDIO = '/api/yt-audio?id=';
+function ytTrack(t) {
+  const name = t.title + (t.artist ? ' — ' + t.artist : '');
+  return VIBE_YTDL ? {name, url: YT_AUDIO + t.id}
+                   : {name, yt: t.id, url: 'yt:' + t.id};
+}
+// The YouTube id behind whatever is playing, or '' when it is not one.
+function ytIdOf(url) {
+  url = String(url || '');
+  return url.startsWith('yt:') ? url.slice(3)
+       : url.startsWith(YT_AUDIO) ? url.slice(YT_AUDIO.length) : '';
+}
+function vibeFlush() {
+  VIBE_DIRTY = true;
+  if (VIBE_SAVING) return VIBE_SAVING;
+  VIBE_SAVING = (async () => {
+    try {
+      while (VIBE_DIRTY) { VIBE_DIRTY = false; await saveVibes(); }
+    } catch (e) {
+      VIBE_DIRTY = false;
+      flash('That change did not reach the computer — check the connection and try it again.', 7000);
+    } finally { VIBE_SAVING = null; }
+    vibePlaylists();
+    paintVibePanel();
+  })();
+  return VIBE_SAVING;
+}
+function vibePlaylists() {
   VIBE_DEFS.forEach(v => {
     // A YouTube vibe plays its list of ids, whatever else the vibe has.
     if (v.yt && v.yt.length) {
-      PLAYLIST[v.id] = v.yt.map(t => ({
-        name: t.title + (t.artist ? ' — ' + t.artist : ''), yt: t.id, url: 'yt:' + t.id}));
+      PLAYLIST[v.id] = v.yt.map(ytTrack);
       delete BAG[v.id];
       return;
     }
@@ -8962,6 +9054,29 @@ async function loadVibes() {
            '&file=' + encodeURIComponent(t.file)}));
     delete BAG[v.id];                   // the shuffle is stale once music moves
   });
+}
+
+async function loadVibes() {
+  // What is on this page is newer than what the computer has. Asking now
+  // would bring the old list back over the top of the change being sent.
+  if (VIBE_SAVING || VIBE_DIRTY) return VIBE_DEFS;
+  try {
+    const d = await (await fetch('/api/vibes', {cache: 'no-store'})).json();
+    if (VIBE_SAVING || VIBE_DIRTY) return VIBE_DEFS;
+    VIBE_DEFS = d.vibes || [];
+    VIBE_MAX = d.max || 4;
+    VIBE_CONVERTER = d.converter !== false;
+    VIBE_YTDL = !!d.ytdl;
+    VIBES_FAILED = false;
+  } catch (e) {
+    // Deliberately does NOT clear VIBE_DEFS on a failed refresh. It used to,
+    // and that is how a page open at the exact second the computer restarted
+    // ended up stuck saying "no vibes yet" - one bad fetch overwrote a good
+    // answer with an empty one, and nothing ever asked again. Keep whatever
+    // was last known good; the regular poll retries this on its own.
+    VIBES_FAILED = true;
+  }
+  vibePlaylists();
   paintVibe();
   return VIBE_DEFS;
 }
@@ -8972,7 +9087,9 @@ async function saveVibes(said) {
     body: JSON.stringify({vibes: VIBE_DEFS.map(v => ({
       id: v.id, name: v.name, icon: v.icon, colour: v.colour,
       says: v.says, builtin: v.builtin, yt: v.yt}))})})).json();
-  if (r.vibes) {
+  // Something changed again while this was in the air: the answer describes
+  // a list the page has already moved on from, and the next save is queued.
+  if (r.vibes && !VIBE_DIRTY) {
     /* Updated in place - the objects already in VIBE_DEFS are kept, only
        their fields change. This used to build a fresh array of fresh
        objects instead, and that is exactly what made picking an icon feel
@@ -9250,27 +9367,66 @@ function vibeCard(v, i) {
   const ytNote = el('div', 'muted');
   ytNote.style.fontSize = '13px';
   ytNote.textContent = (v.yt || []).length
-    ? 'This vibe plays these, through YouTube. It needs the internet, may play an advert, ' +
-      'and stops if the phone screen locks. Remove them all to go back to your own files.'
-    : 'Search for songs or a playlist. Adding any makes this a YouTube vibe: it plays ' +
-      'through YouTube\u2019s own player, so it needs the internet.';
+    ? (VIBE_YTDL
+        ? 'This vibe plays these. Each song is fetched from YouTube once, as audio, and ' +
+          'kept on the computer \u2014 after that it plays here like any other track. ' +
+          'Remove them all to go back to your own files.'
+        : 'This vibe plays these, through YouTube. It needs the internet, may play an advert, ' +
+          'and stops if the phone screen locks. Remove them all to go back to your own files.')
+    : (VIBE_YTDL
+        ? 'Search for songs or a playlist. Each one you add is fetched once, as audio, ' +
+          'and plays in the app\u2019s own player.'
+        : 'Search for songs or a playlist. Adding any makes this a YouTube vibe: it plays ' +
+          'through YouTube\u2019s own player, so it needs the internet.');
   ytBox.appendChild(ytNote);
-  const ytSave = async said => { await saveVibes(said); await loadVibes(); paintVibeEditor(); };
-  (v.yt || []).forEach(t => {
-    const r = el('div', 'trk');
-    r.appendChild(el('span', 'grow', t.title + (t.artist ? ' — ' + t.artist : '')));
-    const x = el('button', 'trk-x', '×');
-    x.type = 'button'; x.title = 'remove ' + t.title;
-    x.onclick = () => { v.yt = v.yt.filter(k => k.id !== t.id); ytSave(); };
-    r.appendChild(x);
-    ytBox.appendChild(r);
-  });
-  if ((v.yt || []).length > 1) {
-    const all = el('button', 'act ghost', 'Remove all of them');
-    all.style.marginTop = '8px';
-    all.onclick = () => { v.yt = []; ytSave('back to your own music'); };
-    ytBox.appendChild(all);
-  }
+  /* The list is redrawn on its own. Rebuilding the whole card for every song
+     added or removed emptied the search underneath it, so adding five songs
+     from one search meant searching five times. `live()` is the vibe as it is
+     now, by id - the page may have fetched a fresh copy since this card was
+     drawn, and a change written onto the old one would be saved by nobody. */
+  const live = () => VIBE_DEFS.find(x => x.id === v.id) || v;
+  const ytList = el('div', 'yt-list');
+  ytBox.appendChild(ytList);
+  const ADDS = [];                       // the Add buttons of the search below
+  const paintAdds = () => {
+    const have = new Set((live().yt || []).map(k => k.id));
+    ADDS.forEach(([id, b]) => {
+      const inIt = have.has(id);
+      b.textContent = inIt ? 'Added ✓' : 'Add';
+      b.classList.toggle('on', inIt);
+      b.title = inIt ? 'Tap to take it back out' : '';
+    });
+  };
+  const paintYtList = () => {
+    const cur = live();
+    ytList.innerHTML = '';
+    const n = (cur.yt || []).length;
+    if (n) ytList.appendChild(el('div', 'muted yt-count', n + (n === 1 ? ' song' : ' songs')));
+    (cur.yt || []).forEach(t => {
+      const r = el('div', 'trk');
+      r.appendChild(el('span', 'grow', t.title + (t.artist ? ' — ' + t.artist : '')));
+      const x = el('button', 'trk-x', '×');
+      x.type = 'button'; x.title = 'remove ' + t.title;
+      x.onclick = () => { const c = live(); c.yt = (c.yt || []).filter(k => k.id !== t.id); ytChanged(); };
+      r.appendChild(x);
+      ytList.appendChild(r);
+    });
+    if (n > 1) {
+      const all = el('button', 'act ghost', 'Remove all of them');
+      all.style.marginTop = '8px';
+      all.onclick = () => {
+        if (!confirm(`Take all ${n} songs out of "${cur.name}"?`)) return;
+        live().yt = []; ytChanged('back to your own music');
+      };
+      ytList.appendChild(all);
+    }
+    paintAdds();
+  };
+  const ytChanged = said => {
+    vibePlaylists(); paintYtList(); paintVibe(); vibeFlush();
+    if (said) flash(said, 3000);
+  };
+  paintYtList();
   const find = el('div', 'yt-find');
   const q = el('input'); q.type = 'text'; q.placeholder = 'Search YouTube Music';
   const kindSel = el('select');
@@ -9282,14 +9438,16 @@ function vibeCard(v, i) {
   const res = el('div', 'yt-res');
   ytBox.appendChild(res);
   const addTracks = (items, said) => {
-    const have = new Set((v.yt || []).map(k => k.id));
-    v.yt = (v.yt || []).concat(items.filter(k => !have.has(k.id))
+    const c = live();
+    const have = new Set((c.yt || []).map(k => k.id));
+    c.yt = (c.yt || []).concat(items.filter(k => !have.has(k.id))
       .map(k => ({id: k.id, title: k.title, artist: k.artist})));
-    ytSave(said);
+    ytChanged(said);
   };
   const runSearch = async () => {
     const term = q.value.trim();
     if (!term) return;
+    ADDS.length = 0;
     res.innerHTML = ''; res.appendChild(el('div', 'empty', 'searching…'));
     let d;
     try { d = await (await fetch('/api/ytm/search?kind=' + kindSel.value +
@@ -9306,19 +9464,29 @@ function vibeCard(v, i) {
         it.count ? it.count + ' tracks' : ''].filter(Boolean).join(' · ')));
       r.appendChild(mid);
       const add = el('button', 'act ghost', it.playlist ? 'Add all' : 'Add');
+      if (!it.playlist) ADDS.push([it.id, add]);
       add.onclick = async () => {
+        if (!it.playlist) {
+          // One tap puts it in, the same tap takes it back out.
+          const c = live();
+          if ((c.yt || []).some(k => k.id === it.id)) {
+            c.yt = c.yt.filter(k => k.id !== it.id); ytChanged();
+          } else addTracks([it]);
+          return;
+        }
         add.disabled = true;
-        if (!it.playlist) return addTracks([it], 'added');
         add.textContent = 'reading…';
         let pl;
         try { pl = await (await fetch('/api/ytm/playlist?id=' + encodeURIComponent(it.playlist))).json(); }
         catch (e) { pl = {error: 'the computer did not answer'}; }
-        if (pl.error || !pl.items.length) { add.textContent = 'could not read it'; return; }
+        if (pl.error || !pl.items.length) { add.textContent = 'could not read it'; add.disabled = false; return; }
         addTracks(pl.items, pl.items.length + ' tracks added');
+        add.textContent = 'Added ✓';
       };
       r.appendChild(add);
       res.appendChild(r);
     });
+    paintAdds();
   };
   goBtn.onclick = runSearch;
   q.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
@@ -9719,10 +9887,10 @@ function paintVibePanel() {
     b('⏭', 'Next', () => vibeSkip(1));
     // The song playing is the one you have an opinion about right now.
     const url = String(vibeTrack.el.dataset.url || '');
-    if (url.startsWith('yt:') && (cur.yt || []).length) {
+    if (ytIdOf(url) && (cur.yt || []).length) {
       b('✕', 'Remove this song from the vibe', async () => {
         const id = cur.id;
-        cur.yt = cur.yt.filter(k => k.id !== url.slice(3));
+        cur.yt = cur.yt.filter(k => k.id !== ytIdOf(url));
         await saveVibes('removed from ' + cur.name);
         await loadVibes();
         const still = VIBE_DEFS.find(v => v.id === id);
@@ -9786,6 +9954,7 @@ function paintVibePanel() {
   const ytVibe = VIBE_DEFS.find(v => (v.yt || []).length);
   into.value = [...into.options].some(o => o.value === keep) ? keep
              : (ytVibe ? ytVibe.id : (into.options[0] ? into.options[0].value : ''));
+  vpPaintAdds();
 }
 
 /* The Vibes panel shows the same card Settings does, for the same vibe. Every
@@ -9818,12 +9987,36 @@ async function vibeTakeYt(items) {
   const have = new Set((v.yt || []).map(k => k.id));
   v.yt = (v.yt || []).concat(items.filter(k => !have.has(k.id))
     .map(k => ({id: k.id, title: k.title, artist: k.artist})));
-  await saveVibes();
-  await loadVibes();
-  $('#vp-into').value = id;
+  vibePlaylists();
+  paintVibe();
   paintVibePanel();
   $('#vp-into').value = id;
+  vpPaintAdds();
+  vibeFlush();              // to the computer, behind you - nothing waits on it
   return id;
+}
+/* Every Add button in the panel's search says what is true of the vibe the
+   search is pointing at - so it is right after a song is added, after it is
+   taken back out, after "Goes into" is changed, and after a vibe is deleted.
+   It used to be painted once, on the tap, and go on saying "Added" about a
+   vibe that no longer existed. */
+var VP_ADDS = [];      // var: the panel repaint reads it before this line runs
+function vpPaintAdds() {
+  const v = VIBE_DEFS.find(x => x.id === $('#vp-into').value);
+  const have = new Set(((v && v.yt) || []).map(k => k.id));
+  VP_ADDS.forEach(([id, b]) => {
+    const inIt = have.has(id);
+    b.textContent = inIt ? 'Added ✓' : 'Add';
+    b.classList.toggle('on', inIt);
+  });
+}
+$('#vp-into').addEventListener('change', vpPaintAdds);
+function vibeDropYt(trackId) {
+  const v = VIBE_DEFS.find(x => x.id === $('#vp-into').value);
+  if (!v) return;
+  v.yt = (v.yt || []).filter(k => k.id !== trackId);
+  vibePlaylists(); paintVibe(); paintVibePanel(); vpPaintAdds();
+  vibeFlush();
 }
 async function vibePlayYt(items) {
   if (!SOUND) flash('Sound is off — turn it on to hear this.', 5000);
@@ -9831,11 +10024,12 @@ async function vibePlayYt(items) {
   if (!id) return;
   const mode = VIBE_DEFS.findIndex(v => v.id === id) + 1;
   const k = items[0];
-  vibeGo(mode, {name: k.title + (k.artist ? ' — ' + k.artist : ''), yt: k.id, url: 'yt:' + k.id});
+  vibeGo(mode, ytTrack(k));
 }
 async function vibePanelSearch() {
   const term = $('#vp-q').value.trim(), res = $('#vp-res');
   if (!term) return;
+  VP_ADDS.length = 0;
   res.innerHTML = ''; res.appendChild(el('div', 'empty', 'searching…'));
   let d;
   try { d = await (await fetch('/api/ytm/search?kind=' + $('#vp-kind').value +
@@ -9864,12 +10058,23 @@ async function vibePanelSearch() {
     play.onclick = async () => { play.disabled = true; const t = await tracks();
       if (t) await vibePlayYt(t); play.disabled = false; };
     const add = el('button', 'act ghost', it.playlist ? 'Add all' : 'Add');
-    add.onclick = async () => { add.disabled = true; const t = await tracks();
-      if (t && await vibeTakeYt(t)) { add.textContent = 'Added'; flash(t.length > 1 ? t.length + ' tracks added' : 'added', 3000); }
-      else add.disabled = false; };
+    if (!it.playlist) VP_ADDS.push([it.id, add]);
+    add.onclick = async () => {
+      if (!it.playlist) {
+        // One tap puts it in; the same tap takes it back out.
+        if (add.classList.contains('on')) vibeDropYt(it.id);
+        else await vibeTakeYt([it]);
+        return;
+      }
+      add.disabled = true; add.textContent = 'reading…';
+      const t = await tracks();
+      if (t && await vibeTakeYt(t)) { add.textContent = 'Added ✓'; flash(t.length + ' tracks added', 3000); }
+      else { add.textContent = 'Add all'; add.disabled = false; }
+    };
     r.appendChild(play); r.appendChild(add);
     res.appendChild(r);
   });
+  vpPaintAdds();
 }
 $('#vp-go').onclick = vibePanelSearch;
 $('#vp-q').addEventListener('keydown', e => { if (e.key === 'Enter') vibePanelSearch(); });
@@ -10183,14 +10388,53 @@ function launchShortcut(which) {
   logEvent('ui.shortcut', {which});
   hideResumeOffer();
   LAST_RUN = null;
-  if (which === 'darkroom') devEnter('');
+  if (which === 'darkroom') backIntoMyDarkroom().then(ok => { if (!ok) devEnter(''); });
   else { NT.want = 'aftershot'; go('newtask'); }
   return true;
 }
+/* The darkroom icon is how he comes back to the app, not only how he starts.
+   The phone drops the page from memory while it is in a pocket, the icon is
+   tapped again a minute later, and it used to open on "no folder chosen" with
+   the shoot he was halfway through nowhere in sight. If this device was in a
+   darkroom within the last fifteen minutes, that is where the icon goes. */
+async function backIntoMyDarkroom() {
+  if (!STATE.darkroom) return false;
+  let d = null;
+  try { d = await (await fetch('/api/darkroom')).json(); } catch (e) { return false; }
+  if (!d || !d.folder || !d.selection || d.device !== DEVICE_ID) return false;
+  if ((STATE.now || 0) - (d.at || 0) > HANDOVER_FRESH) return false;
+  DARKROOM_OFFERED = true; PLACE_OFFERED = true;
+  logEvent('ui.back-into-darkroom', {folder: d.folder});
+  await enterSavedDarkroom(d);
+  return true;
+}
+/* What kind of arrival this was, written down. "It refreshed on its own" has
+   four different causes - the phone discarded the page, somebody pressed the
+   button, the icon was tapped, the browser restored a tab - and from the
+   outside they all look the same. */
+(() => {
+  let nav = '';
+  try { nav = (performance.getEntriesByType('navigation')[0] || {}).type || ''; } catch (e) {}
+  logEvent('ui.page-load', {nav, discarded: !!document.wasDiscarded,
+    shortcut: SHORTCUT, hidden: document.hidden,
+    app: window.matchMedia('(display-mode: standalone)').matches});
+})();
 (async () => {
   let resumed = false;
   try {
     await loadState();
+    /* A page that has just opened in front of somebody is that device being
+       picked up, exactly as unlocking it is. It used to open behind the
+       "taken over" curtain whenever the phone had been quiet for half a
+       minute, and wait to be tapped. */
+    if (!HELD && !document.hidden && !DOWN) {
+      try {
+        await fetch('/api/control', {method: 'POST',
+          headers: {'Content-Type': 'application/json'}, body: '{}'});
+        logEvent('ui.take-control', {how: 'arrived'});
+        await loadState();
+      } catch (e) {}
+    }
     resumed = await restoreRun(false);
     if (SHORTCUT) {
       // This screen was asked for by name, so it is this device's place from
@@ -10198,7 +10442,7 @@ function launchShortcut(which) {
       SCREEN.ready = true;
       if (launchShortcut(SHORTCUT)) return;
     }
-    if (!resumed) await followHandover(false);
+    if (!resumed) await followHandover(false, true);
   } finally {
     SCREEN.ready = true;
   }
@@ -10431,6 +10675,7 @@ $('#off-retry').onclick = () => { MISSES = 0; $('#off-try').textContent = ''; lo
 </button>
 <script>
   document.getElementById('hard-refresh-btn').addEventListener('click', function () {
+    try { logEvent('ui.refresh-button', {}); } catch (e) {}
     location.reload();
   });
 </script>

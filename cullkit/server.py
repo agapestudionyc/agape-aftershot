@@ -1065,9 +1065,28 @@ class Handler(BaseHTTPRequestHandler):
                                      [t["name"] for t in V.tracks(v["id"])])
                     row["own"] = V.tracks(v["id"])
                     out.append(row)
+                from . import ytm
+                ids = [t["id"] for v in out for t in (v.get("yt") or [])]
+                # Whatever a vibe holds that is not here yet is fetched now, so
+                # opening the app is enough to finish what an Add started.
+                ytm.prefetch(ids)
                 return self._send(200, {"vibes": out, "max": V.MAX_VIBES,
+                                        # Whether YouTube tracks play as audio
+                                        # in the app's own player (yt-dlp is
+                                        # installed) or in YouTube's embed.
+                                        "ytdl": ytm.can_fetch(),
+                                        "yt_ready": ytm.status(ids),
                                         "converter": bool(
                                             __import__("shutil").which("ffmpeg"))})
+            if path == "/api/yt-audio":
+                # One YouTube track as a plain audio file, fetched the first
+                # time it is asked for and kept. See the second half of ytm.py.
+                from . import ytm
+                f, why = ytm.audio(q.get("id", ""))
+                if not f:
+                    journal.write("yt.audio-failed", id=q.get("id", ""), why=why)
+                    return self._send(502, {"error": why})
+                return self._file(f, mimetypes.guess_type(str(f))[0] or "audio/mp4")
             if path == "/api/vibe-track":
                 # A vibe's own music, which lives beside the program's state
                 # rather than inside the web folder. Contained the same way
@@ -1118,12 +1137,7 @@ class Handler(BaseHTTPRequestHandler):
                 # The run belongs to the job, not to the device holding it, so
                 # picking it up on the laptop lands exactly where the tablet was.
                 f = Path.home() / ".cullkit" / "run.json"
-                if not f.is_file():
-                    return self._send(200, {"active": False})
-                try:
-                    return self._send(200, json.loads(f.read_text(encoding="utf-8")))
-                except Exception:
-                    return self._send(200, {"active": False})
+                return self._send(200, _read_state(f) or {"active": False})
             if path == "/api/selection":
                 # Asking for a folder's selection means standing in the
                 # darkroom looking at that folder - nothing else in the app
@@ -1352,6 +1366,12 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/selection":
                 # Saved as you go, so closing the iPad mid-review loses nothing.
+                # No folder is not a folder. Path("") is ".", the program's own
+                # directory - so a save that fired a moment after the page had
+                # left the darkroom wrote a selection into the program and
+                # declared a darkroom open on it.
+                if not str(data.get("folder") or "").strip():
+                    return self._send(200, {"ok": True, "count": 0, "gone": True})
                 folder = Path(data["folder"])
                 if not folder.is_dir():
                     # The shoot has just gone to the discards with the rest of
@@ -1386,9 +1406,10 @@ class Handler(BaseHTTPRequestHandler):
                 # Walking in is the event, not choosing your first photograph.
                 # This only writes the pointer - never selection.json - so it
                 # cannot overwrite picks with an empty list on the way in.
-                _mark_darkroom(str(data.get("folder") or ""),
-                               str(data.get("device") or ""),
-                               str(data.get("mode") or ""))
+                if str(data.get("folder") or "").strip():
+                    _mark_darkroom(str(data.get("folder") or ""),
+                                   str(data.get("device") or ""),
+                                   str(data.get("mode") or ""))
                 return self._send(200, {"ok": True})
             if path == "/api/vibes":
                 from . import vibes as V
@@ -1401,6 +1422,13 @@ class Handler(BaseHTTPRequestHandler):
                     for d in V.AUDIO.iterdir():
                         if d.is_dir() and d.name not in keep:
                             V.forget_all(d.name)
+                # The same for audio fetched from YouTube: gone from every
+                # vibe, gone from the disk - and what was just added is
+                # fetched now, behind whoever added it.
+                from . import ytm
+                yt_ids = [t["id"] for v in saved for t in (v.get("yt") or [])]
+                ytm.prune(yt_ids)
+                ytm.prefetch(yt_ids)
                 journal.write("vibes.saved", count=len(saved),
                               names=[v["name"] for v in saved])
                 return self._send(200, {"ok": True, "vibes": saved})
@@ -1711,7 +1739,7 @@ class Handler(BaseHTTPRequestHandler):
             # browser that pressed the button; every other screen carried on
             # showing a run that no longer existed.
             "sep": os.sep,       # a backslash on Windows, a slash on a Mac
-            "run_active": bool(self._read_json(
+            "run_active": bool(_read_state(
                 Path.home() / ".cullkit" / "run.json").get("active")),
             # Which darkroom is open, so a page sitting in one that has been
             # closed elsewhere finds out and steps out of it.
@@ -2591,6 +2619,44 @@ def _write_whole(path, text):
         pass
 
 
+"""A small state file that could not be read is not a small state file that
+says nothing.
+
+Every reader of these used to treat the two the same: any failure came back as
+`{}`, and `{}` means "no darkroom is open", "no run is active". But Windows
+refuses to open a file for the instant it is being swapped, and every pick in
+the darkroom swaps two of them while every screen is being told to come and
+look. So sooner or later a poll landed on that instant, the server answered
+"nothing is open", and the page - believing it - stepped out of the darkroom
+and went Home in the middle of somebody choosing photographs. The journal has
+it twenty-one times in two weeks.
+
+So a read is tried again for a quarter of a second, and if it still cannot be
+had, the last answer that *was* read stands. Only a file that is really not
+there says nothing.
+"""
+_last_good = {}
+
+
+def _read_state(path):
+    for attempt in range(25):
+        try:
+            d = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                _last_good[str(path)] = d
+                return dict(d)
+        except FileNotFoundError:
+            if attempt >= 2:              # gone, not mid-swap
+                _last_good.pop(str(path), None)
+                return {}
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.01)
+    journal.write("state.unreadable", file=path.name,
+                  kept=str(path) in _last_good)
+    return dict(_last_good.get(str(path)) or {})
+
+
 def _save_control(control):
     try:
         CONTROL.parent.mkdir(parents=True, exist_ok=True)
@@ -2676,10 +2742,7 @@ def _note_actor(device, what=""):
 
 
 def _last_actor():
-    try:
-        return json.loads(SESSION.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return _read_state(SESSION)
 
 
 # Closing wins over presence, for a moment.
@@ -2710,20 +2773,14 @@ def _mark_darkroom(folder, device, mode, closing=False):
 
 def _recently_closed():
     """True while a deliberate close still outranks anybody's presence."""
-    try:
-        d = json.loads(DARKROOM.read_text(encoding="utf-8"))
-    except Exception:
-        return False
+    d = _read_state(DARKROOM)
     return time.time() - d.get("closed_at", 0) < CLOSE_WINS_FOR
 
 
 def _open_darkroom(stale=6 * 3600):
     """Empty when nothing is open, or when what was open is old enough that
     dropping somebody into it on a fresh morning would be a surprise."""
-    try:
-        d = json.loads(DARKROOM.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    d = _read_state(DARKROOM)
     if not d.get("folder") or time.time() - d.get("at", 0) > stale:
         return {}
     if not (Path(d["folder"]) / "_cullkit").is_dir():
@@ -2754,10 +2811,7 @@ def _mark_place(view, folder, cmd, device):
 
 
 def _last_place(stale=6 * 3600):
-    try:
-        d = json.loads(PLACE.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    d = _read_state(PLACE)
     if not d.get("view") or time.time() - d.get("at", 0) > stale:
         return {}
     folder = d.get("folder") or ""
@@ -2815,11 +2869,7 @@ def _program_state():
 
 
 def _read_run():
-    try:
-        return json.loads((Path.home() / ".cullkit" / "run.json")
-                          .read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return _read_state(Path.home() / ".cullkit" / "run.json")
 
 
 def _reset_everything():

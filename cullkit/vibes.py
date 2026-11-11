@@ -105,6 +105,11 @@ def load() -> list:
         vibes = got.get("vibes") if isinstance(got, dict) else got
         if isinstance(vibes, list) and vibes:
             return vibes[:MAX_VIBES]
+        # Deleted down to none is a choice, not a missing file. The three that
+        # shipped used to walk back in the moment the last vibe was deleted,
+        # so clearing the list out to start again could not be done at all.
+        if isinstance(got, dict) and vibes == []:
+            return []
     except Exception:
         pass
     return [dict(v) for v in DEFAULTS]

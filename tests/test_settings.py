@@ -247,7 +247,7 @@ class TestSavingAVibeDoesNotOrphanWhatIsOnScreen(unittest.TestCase):
     def test_the_save_updates_objects_in_place(self):
         page = _page()
         i = page.index("async function saveVibes(said)")
-        block = page[i:i + 1400]
+        block = page[i:i + 1700]
         self.assertIn("Object.assign(v, saved)", block)
         # The tell of the old bug: rebuilding the array from scratch with
         # spread syntax makes a new object even for an id that already had
@@ -259,7 +259,7 @@ class TestSavingAVibeDoesNotOrphanWhatIsOnScreen(unittest.TestCase):
         # array reference the same way replacing the objects inside it did.
         page = _page()
         i = page.index("async function saveVibes(said)")
-        block = page[i:i + 1400]
+        block = page[i:i + 1700]
         self.assertNotIn("VIBE_DEFS = r.vibes", block)
 
 
@@ -273,7 +273,7 @@ class TestALostVibeFetchHealsItself(unittest.TestCase):
     def test_a_failed_fetch_does_not_erase_a_good_answer(self):
         src = _page()
         i = src.index("async function loadVibes()")
-        block = src[i:i + 900]
+        block = src[i:i + 1300]
         self.assertIn("VIBES_FAILED = true", block)
         self.assertNotIn("VIBE_DEFS = [];", block)
 
