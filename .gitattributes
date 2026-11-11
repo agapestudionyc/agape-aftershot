@@ -1,0 +1,5 @@
+# These three run on macOS, where a carriage return in a shell script is an
+# error on its first line. Keep them LF whatever machine they are edited on.
+*.command text eol=lf
+cull text eol=lf
+*.sh text eol=lf

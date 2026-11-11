@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,10 +30,18 @@ class Volume:
     free: int = 0
     dcim: bool = False
     media: int = 0
+    # Off Windows there are no letters: a drive is where it is mounted, and
+    # `short` is the couple of characters shown in the letter's place.
+    mount: str = ""
+    short: str = ""
 
     @property
     def path(self):
-        return Path(self.letter + ":\\")
+        return Path(self.mount) if self.mount else Path(self.letter + ":\\")
+
+    @property
+    def tag(self):
+        return self.short or (self.letter + ":")
 
     @property
     def used(self):
@@ -42,6 +51,8 @@ class Volume:
 def list_volumes(count_media=False, max_count=20000):
     """Every mounted drive, flagged for whether it looks like a camera card."""
     out = []
+    if os.name != "nt":
+        return _posix_volumes(count_media, max_count)
     try:
         mask = ctypes.windll.kernel32.GetLogicalDrives()
     except Exception:
@@ -82,6 +93,27 @@ def list_volumes(count_media=False, max_count=20000):
             pass
         if count_media:
             vol.media = count_photos(root, cap=max_count)
+        out.append(vol)
+    return out
+
+
+def _posix_volumes(count_media=False, max_count=20000):
+    """The same list on a Mac: the startup disk and whatever is in /Volumes."""
+    from . import plat
+
+    out = []
+    for v in plat.posix_volumes():
+        total, free = plat.disk_usage(v["mount"])
+        vol = Volume(letter="", label=v["label"], kind=v["kind"], total=total,
+                     free=free, mount=v["mount"], short=v["tag"])
+        try:
+            vol.dcim = (Path(v["mount"]) / "DCIM").is_dir()
+        except OSError:
+            pass
+        if count_media and v["mount"] != "/":
+            # Never the startup disk: that is the whole computer, and counting
+            # the photographs on it means reading every folder there is.
+            vol.media = count_photos(v["mount"], cap=max_count)
         out.append(vol)
     return out
 

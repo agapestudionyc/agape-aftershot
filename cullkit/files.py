@@ -63,7 +63,8 @@ def _hidden(p: Path, st=None) -> bool:
         return True
     try:
         st = st or p.stat()
-        return bool(getattr(st, "st_file_attributes", 0) & 0x2)   # FILE_ATTRIBUTE_HIDDEN
+        return bool(getattr(st, "st_file_attributes", 0) & 0x2      # Windows: hidden
+                    or getattr(st, "st_flags", 0) & 0x8000)         # macOS: UF_HIDDEN
     except OSError:
         return False
 
@@ -96,6 +97,7 @@ def places(config: dict) -> list:
                      ("Desktop", home / "OneDrive" / "Escritorio"),
                      ("Downloads", home / "Downloads"),
                      ("Pictures", home / "Pictures"),
+                     ("Movies", home / "Movies"),
                      ("Documents", home / "Documents")):
         if p.is_dir() and not any(o["label"] == label for o in out):
             out.append({"label": label, "path": str(p), "kind": "home"})
@@ -116,6 +118,11 @@ def listing(path: str) -> dict:
     except OSError as exc:
         return {"error": str(exc)}
     parent = str(root.parent) if root.parent != root else ""
+    # `/Volumes/Photos` has a parent folder, but it is the top of a drive:
+    # one step up from it is the list of drives, as it is from `E:\\`.
+    from . import plat
+    if not plat.IS_WIN and str(root) == plat.mount_of(root):
+        parent = ""
     return {"path": str(root), "parent": parent, "name": root.name or str(root),
             "items": rows}
 
@@ -379,18 +386,17 @@ def _protected(p: Path) -> str:
         r = p.resolve()
     except OSError:
         r = p
-    if r.parent == r:
+    from . import plat
+
+    if r.parent == r or str(r) == plat.mount_of(r):
         return "that is a whole drive"
-    win = Path(os.environ.get("SystemRoot", r"C:\Windows")).resolve()
-    for guard in (win, Path(os.environ.get("ProgramFiles", r"C:\Program Files")),
-                  Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")),
-                  Path.home() / ".cullkit"):
+    for guard in plat.protected_roots() + [Path.home() / ".cullkit"]:
         try:
             g = guard.resolve()
         except OSError:
             continue
         if r == g or g in r.parents:
-            return "that belongs to Windows or to this program"
+            return "that belongs to the system or to this program"
     if r == Path.home().resolve():
         return "that is your whole user folder"
     return ""
@@ -470,6 +476,21 @@ def trash(paths: list) -> dict:
     the file stays exactly where it was; this never falls back to deleting.
     """
     done, skipped = [], []
+    if os.name != "nt":
+        # A Mac: the Trash, through Finder so it can be put back. See plat.trash.
+        from . import plat
+        for s in paths:
+            p = Path(s)
+            why = _protected(p)
+            if why:
+                skipped.append({"name": p.name or str(p), "why": why})
+            elif not p.exists():
+                skipped.append({"name": p.name, "why": "no longer there"})
+            elif plat.trash(p):
+                done.append(str(p))
+            else:
+                skipped.append({"name": p.name, "why": "it could not be put in the Trash"})
+        return {"ok": True, "trashed": done, "skipped": skipped}
     FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = \
         3, 0x4, 0x10, 0x40, 0x400
     FOF_WANTNUKEWARNING = 0x4000     # fail rather than delete what cannot be binned
@@ -555,10 +576,8 @@ def open_on_pc(path: str, reveal=False) -> dict:
     if not p.exists():
         return {"error": "that is no longer there"}
     try:
-        if reveal:
-            subprocess.Popen(["explorer", "/select,", str(p)])
-        else:
-            os.startfile(str(p))          # noqa: S606 - the user's own file
+        from . import plat
+        plat.open_path(str(p), reveal=reveal)
     except (OSError, AttributeError) as exc:
         return {"error": str(exc)}
     return {"ok": True}

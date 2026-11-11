@@ -240,5 +240,28 @@ class TestEveryPanelCanBePutAway(unittest.TestCase):
         self.assertIn("host.contains(logEl)", self.src)
 
 
+class TestThePageStillParses(unittest.TestCase):
+    """There is no JavaScript runtime in this suite, so a syntax error in the
+    page passes every test and kills the whole interface in the browser. One
+    did, on 2026-11-10: a helper was added as `const SEP` when a `const SEP`
+    already existed two thousand lines further down. A name declared twice at
+    the top level stops the entire script from running - no buttons, no
+    state, a page that looks drawn and is dead.
+
+    This cannot prove the page parses. It catches the one kind of mistake a
+    file this long invites, and the only one made so far."""
+
+    def test_no_name_is_declared_twice_at_the_top_level(self):
+        names = re.findall(r"(?m)^(?:const|let|class)\s+([A-Za-z_$][\w$]*)", _page())
+        twice = sorted({n for n in names if names.count(n) > 1})
+        self.assertEqual(twice, [])
+
+    def test_a_function_and_a_constant_do_not_share_a_name(self):
+        src = _page()
+        consts = set(re.findall(r"(?m)^(?:const|let|class)\s+([A-Za-z_$][\w$]*)", src))
+        funcs = set(re.findall(r"(?m)^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)", src))
+        self.assertEqual(sorted(consts & funcs), [])
+
+
 if __name__ == "__main__":
     unittest.main()

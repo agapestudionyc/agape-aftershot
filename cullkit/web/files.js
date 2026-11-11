@@ -217,7 +217,7 @@ function driveCard(d) {
   names.appendChild(el('small', '', d.card ? 'Camera card' : d.kind === 'removable' ? 'Removable'
                                    : 'Drive on this computer'));
   top.appendChild(names);
-  top.appendChild(el('em', '', d.letter + ':'));
+  top.appendChild(el('em', '', dtag(d)));
   t.appendChild(top);
   const bar = el('span', 'fx-meter big');
   bar.appendChild(Object.assign(el('i'), {style: `width:${Math.max(used, 2)}%`}));
@@ -261,16 +261,21 @@ function paintHomeTiles() {
   return wrap;
 }
 
+const driveName = d => (d.label || 'Drive') + (d.letter ? ` (${d.letter}:)` : '');
 function paintTitle() {
   const root = FX.path === '' && !FX.q;
   let name = 'Files', sub = 'Every drive on this computer';
   if (!root) {
     const parts = FX.path.split(/[\\/]+/).filter(Boolean);
     name = parts.length > 1 ? parts[parts.length - 1] : FX.path;
-    const d = ((FX.home || {}).drives || []).find(x => FX.path.toUpperCase().startsWith(x.letter + ':'));
-    if (parts.length <= 1 && d) name = `${d.label || 'Drive'} (${d.letter}:)`;
+    // The drive this folder is on: the longest mount that is the start of the path.
+    const d = ((FX.home || {}).drives || [])
+      .filter(x => pinside(FX.path.toLowerCase(), x.path.toLowerCase()) || x.path === '/')
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    const atTop = d && ptrim(FX.path).toLowerCase() === ptrim(d.path).toLowerCase();
+    if (atTop) name = driveName(d);
     sub = FX.q ? `Searching for “${FX.q}” in here and below`
-               : (d ? (parts.length <= 1 ? '' : `${d.label || 'Drive'} (${d.letter}:) · `) + `${human(d.free)} free` : '');
+               : (d ? (atTop ? '' : driveName(d) + ' · ') + `${human(d.free)} free` : '');
   }
   $('#fx-name').textContent = name;
   $('#fx-sub').textContent = sub;
@@ -324,14 +329,17 @@ function paintCrumb() {
     b.onclick = () => fxGo(path);
     c.appendChild(b);
   };
-  add('This PC', '', FX.path === '');
+  add(STATE.sep === '/' ? 'This Mac' : 'This PC', '', FX.path === '');
   if (FX.path) {
     const parts = FX.path.split(/[\\/]+/).filter(Boolean);
+    // `C:\\Users\\me` on Windows, `/Volumes/Photos/me` on a Mac.
+    const posix = FX.path.startsWith('/');
     let acc = '';
     parts.forEach((p, i) => {
-      acc = i === 0 ? p + '\\' : acc + (acc.endsWith('\\') ? '' : '\\') + p;
+      acc = posix ? acc + '/' + p
+                  : (i === 0 ? p + '\\' : acc + (acc.endsWith('\\') ? '' : '\\') + p);
       c.appendChild(el('i', '', '›'));
-      add(i === 0 ? p : p, acc, i === parts.length - 1);
+      add(p, acc, i === parts.length - 1);
     });
   }
   c.scrollLeft = c.scrollWidth;
@@ -345,7 +353,8 @@ function paintSide() {
   const here = (FX.path || '').toLowerCase();
   const row = (icon, label, path, sub, meter) => {
     const on = path === '' ? FX.path === ''
-      : (here === path.toLowerCase() || here.startsWith(path.toLowerCase().replace(/\\?$/, '\\')));
+      : (path === '/' ? !((FX.home || {}).drives || []).some(x => x.path !== '/' && pinside(here, x.path.toLowerCase()))
+                      : pinside(here, path.toLowerCase()));
     const b = el('button', 'fx-place' + (on ? ' on' : ''));
     b.innerHTML = svg(icon, 17);
     const txt = el('span', 'fx-place-t');
@@ -364,7 +373,7 @@ function paintSide() {
     const used = d.total ? Math.round(d.used / d.total * 100) : 0;
     const m = el('span', 'fx-meter' + (used > 90 ? ' full' : ''));
     m.appendChild(Object.assign(el('i'), {style: `width:${Math.max(used, 2)}%`}));
-    row(d.card ? ICON.card : ICON.drive, `${d.letter}: ${d.label || ''}`.trim(), d.path,
+    row(d.card ? ICON.card : ICON.drive, ((d.letter ? d.letter + ': ' : '') + (d.label || '')).trim(), d.path,
         d.total ? human(d.free) + ' free' : '', m);
   });
   if (h.places.length) s.appendChild(el('div', 'fx-h', 'Places'));
@@ -524,7 +533,7 @@ async function moveOrCopy(paths, dest, copy) {
     FX.undo = {label: 'the move', run: async () => {
       const byHome = {};
       (got.moved || []).forEach(m => {
-        const home = m.src.slice(0, m.src.lastIndexOf('\\')) || m.src;
+        const home = pparent(m.src) || m.src;
         (byHome[home] = byHome[home] || []).push(m.dst);
       });
       for (const home in byHome) await post('move', {paths: byHome[home], dest: home});
@@ -624,7 +633,7 @@ async function upload(files) {
   }
   FX.sending = null;
   box.remove();
-  say(failed ? `${done} uploaded, then: ${failed}` : `${done} file${done > 1 ? 's' : ''} uploaded to ${dest.split('\\').pop() || dest}`, 6000);
+  say(failed ? `${done} uploaded, then: ${failed}` : `${done} file${done > 1 ? 's' : ''} uploaded to ${pname(dest) || dest}`, 6000);
   if (FX.path === dest) refresh();
 }
 

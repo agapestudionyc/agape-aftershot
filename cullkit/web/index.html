@@ -303,7 +303,7 @@ input[type=text]{font:400 14px "IBM Plex Sans",sans-serif;padding:9px 12px;
 .drive{display:flex;align-items:center;gap:14px;padding:12px 0;
   border-bottom:1px solid var(--rule)}
 .drive:last-child{border-bottom:none}
-.letter{font:800 20px/1 Archivo,sans-serif;width:38px;color:var(--ink)}
+.letter{font:800 20px/1 Archivo,sans-serif;min-width:38px;flex:none;color:var(--ink)}
 .bar{height:5px;background:var(--sunk);border-radius:3px;overflow:hidden;margin-top:6px}
 .bar i{display:block;height:100%;background:var(--ink-3)}
 .chip{display:inline-block;padding:2px 9px;border-radius:11px;
@@ -2958,6 +2958,18 @@ const human = n => { const u = ['B','KB','MB','GB','TB']; let i = 0;
 
 let STATE = {}, SRC = '', DEST_ROOT = '', SHOOT_DIR = '', CULL_DIR = '', OUT_ROOT = '';
 
+/* Paths belong to the computer, and the computer may be a Mac. The page
+   never writes a separator of its own: it asks which one this machine uses
+   (`sep`, in the state) and joins, splits and compares through these. */
+const PSEP = () => (STATE && STATE.sep) || '\\';
+const ptrim = p => String(p || '').replace(/[\\/]+$/, '');
+const pjoin = (a, b) => ptrim(a) + PSEP() + b;
+const pname = p => ptrim(p).split(/[\\/]/).pop() || '';
+const pparent = p => { const t = ptrim(p), i = Math.max(t.lastIndexOf('\\'), t.lastIndexOf('/'));
+  return i < 0 ? '' : (t.slice(0, i) || (t.startsWith('/') ? '/' : '')); };
+const pinside = (child, folder) => child === folder || child.startsWith(ptrim(folder) + PSEP());
+const dtag = v => v.tag || (v.letter + ':');
+
 /* ================= real audio, with synth as the fallback =================
    Files live in cullkit/web/audio/. If one is missing the synthesised version
    plays instead, so the app never depends on them being there. */
@@ -4568,7 +4580,7 @@ async function loadState() {
   STATE.drives.forEach(v => {
     const row = el('div', 'drive');
     row.style.cursor = 'pointer';
-    row.appendChild(el('div', 'letter', v.letter + ':'));
+    row.appendChild(el('div', 'letter', dtag(v)));
     const mid = el('div', 'grow');
     const top = el('div', 'row');
     top.appendChild(el('span', '', v.label || '(no label)'));
@@ -6050,7 +6062,7 @@ function picker(host, id, start, onPick) {
     if (!path) {
       STATE.drives.forEach(v => {
         const b = el('button');
-        b.appendChild(el('span', 'letter', v.letter + ':'));
+        b.appendChild(el('span', 'letter', dtag(v)));
         b.appendChild(el('span', 'grow', v.label || '(no label)'));
         if (v.card) b.appendChild(el('span', 'chip c-card', 'card'));
         b.onclick = () => show(v.path);
@@ -6386,7 +6398,7 @@ function updateDest() {
   const root = DEST_ROOT || (STATE.config && STATE.config.archive_root) || '';
   const name = $('#imp-name').value.trim() ||
     localDay() + ' import';
-  $('#imp-dest').textContent = root ? root + '\\' + name : 'pick a drive and folder above';
+  $('#imp-dest').textContent = root ? pjoin(root, name) : 'pick a drive and folder above';
 }
 $('#imp-name').addEventListener('input', updateDest);
 /* One tap for the folder you use nine times out of ten: your archive,
@@ -6436,7 +6448,7 @@ function importDestFromArgv(argv) {
   const di = (argv || []).indexOf('--dest'), ni = (argv || []).indexOf('--name');
   const root = di >= 0 ? argv[di + 1] : '';
   const name = ni >= 0 ? argv[ni + 1] : '';
-  return root && name ? root + '\\' + name : '';
+  return root && name ? pjoin(root, name) : '';
 }
 
 /* ================= import ================= */
@@ -8224,8 +8236,8 @@ $('#dev-back').onclick = () => {
 function updateDevDest() {
   const root = OUT_ROOT || (STATE.config && STATE.config.work_root) || '';
   const name = $('#dev-name').value.trim() ||
-    ((DEV.folder.split('\\').pop() || 'Shoot') + ' Selects');
-  $('#dev-dest').textContent = root ? root + '\\' + name : 'pick a drive and folder above';
+    ((pname(DEV.folder) || 'Shoot') + ' Selects');
+  $('#dev-dest').textContent = root ? pjoin(root, name) : 'pick a drive and folder above';
   updateDevRest();
 }
 /* What is left in the shoot after the picks leave goes to _DESCARTABLES on
@@ -8242,7 +8254,7 @@ function devRestBlocked() {
   const root = (OUT_ROOT || (STATE.config && STATE.config.work_root) || '')
     .replace(/[\\/]+$/, '').toLowerCase();
   if (!f) return 'no folder';
-  if (root === f || root.startsWith(f + '\\'))
+  if (pinside(root, f))
     return 'Your selection is going inside this shoot, so the rest stays where it is.';
   return '';
 }
@@ -8251,7 +8263,7 @@ function updateDevRest() {
   box.disabled = !!blocked;
   $('#dev-rest-row').style.opacity = blocked ? .5 : 1;
   const name = (DEV.folder || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
-  $('#dev-rest-path').textContent = blocked || (devRestRoot() + '\\' + name);
+  $('#dev-rest-path').textContent = blocked || pjoin(devRestRoot(), name);
 }
 function devRestOn() { return !$('#dev-rest').disabled && $('#dev-rest').checked; }
 $('#dev-name').addEventListener('input', updateDevDest);
@@ -8265,7 +8277,7 @@ $('#dest-inside').onclick = () => { OUT_ROOT = DEV.folder; updateDevDest(); };
 function devMoveArgv(apply) {
   const root = OUT_ROOT || (STATE.config && STATE.config.work_root) || '';
   const name = $('#dev-name').value.trim() ||
-    ((DEV.folder.split('\\').pop() || 'Shoot') + ' Selects');
+    ((pname(DEV.folder) || 'Shoot') + ' Selects');
   const a = ['work', DEV.folder];
   [...DEV.picked].forEach(b => {
     const m = b.match(/(\d+)(?!.*\d)/);
@@ -8314,7 +8326,7 @@ function devNumsArgv(apply, withDest) {
   if (withDest) {
     const root = OUT_ROOT || (STATE.config && STATE.config.work_root) || '';
     const name = $('#dev-name').value.trim() ||
-      ((DEV.folder.split('\\').pop() || 'Shoot') + ' Selects');
+      ((pname(DEV.folder) || 'Shoot') + ' Selects');
     a.push('--dest', root, '--into', name);
     if (devRestOn()) a.push('--discard-rest');
   }

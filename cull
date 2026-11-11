@@ -1,0 +1,4 @@
+#!/bin/bash
+# The command line on macOS:  ./cull drives   ./cull quality "/Volumes/Photos/Shoot"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+PYTHONPATH="$DIR" exec "$HOME/.cullkit/venv/bin/python" -m cullkit.cli "$@"

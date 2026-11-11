@@ -8,8 +8,9 @@ holds, sets aside the soft and blinked frames, and gives you a darkroom to make
 your final selection in. It runs entirely on your machine: no cloud, no
 account, no subscription, and it never deletes a photograph.
 
-You run it on a Windows PC and use it from that PC's browser — or from your
-phone or tablet, as an installed app, while the PC does the work.
+You run it on a Windows PC or a Mac and use it from that computer's browser —
+or from your phone or tablet, as an installed app, while the computer does the
+work.
 
 *Hecho por Andres Martinez · Agape Studio, New York. Las instrucciones están en
 inglés porque la interfaz lo está; funciona igual si escribes en español.*
@@ -41,7 +42,7 @@ you cannot judge colour under a safelight. Three ways to work:
 
 Zoom reads the original file at 100% or 200%. Your picks are saved as you go.
 
-### Files (blue) — a file explorer for the PC's drives
+### Files (blue) — a file explorer for the computer's drives
 
 Browse every drive from any device: thumbnails (including RAW), quick look for
 images, video, audio, PDF and text, search, copy, move, rename, upload from
@@ -63,7 +64,7 @@ Projects or the Darkroom.
 ## The rules it never breaks
 
 - **Nothing is deleted.** Rejects are *moved* to a folder you can look through.
-  In Files, delete means the Windows Recycle Bin.
+  In Files, delete means the Recycle Bin on Windows and the Trash on a Mac.
 - **Nothing is overwritten.** A name already taken is skipped or numbered.
 - **Dry run first.** Anything that moves files shows the plan before it applies.
 - **Everything is undoable.** Each applied move writes a journal that `undo` can reverse.
@@ -74,17 +75,25 @@ Projects or the Darkroom.
 
 ## Install
 
-You need a **Windows 10 or 11** PC. It has been used on one machine, with Nikon
-`.NEF` files; other RAW formats that embed a JPEG preview should work but are
-less tested. macOS and Linux are not supported yet.
+It runs on **Windows 10 or 11** and on **macOS**. It has been used daily on one
+Windows machine, with Nikon `.NEF` files; other RAW formats that embed a JPEG
+preview should work but are less tested.
 
-### 1. Install Python 3.12
+> **macOS is new and has not been run on a Mac by its authors.** The code for
+> it was written from Apple's documentation and tested only as far as a Windows
+> machine can test it. Expect rough edges on a first install, and please
+> [open an issue](https://github.com/agapestudionyc/agape-aftershot/issues)
+> with what you see - that is how it gets finished.
+
+### Windows
+
+**1. Install Python 3.12**
 
 ```bash
 winget install --id Python.Python.3.12 --scope user
 ```
 
-### 2. Get the code
+**2. Get the code**
 
 ```bash
 git clone https://github.com/agapestudionyc/agape-aftershot.git
@@ -96,7 +105,7 @@ cd agape-aftershot
 
 (Or use **Code → Download ZIP** on GitHub and unzip it.)
 
-### 3. Run setup, once
+**3. Run setup, once**
 
 ```bash
 setup.cmd
@@ -106,7 +115,7 @@ This creates a private Python environment in `%USERPROFILE%\.cullkit\venv` and
 downloads the libraries (about 250 MB, a few minutes). The face models
 (~300 MB) download by themselves the first time you sift.
 
-### 4. Tell it where your photographs live
+**4. Tell it where your photographs live**
 
 ```bash
 cull.cmd config --archive-root "D:\Photos\Archive" --work-root "D:\Photos\Current"
@@ -115,7 +124,7 @@ cull.cmd config --archive-root "D:\Photos\Archive" --work-root "D:\Photos\Curren
 *Archive* is where imported cards land; *Working* is where your selections go.
 You can change both later in the app's Settings.
 
-### 5. Start it
+**5. Start it**
 
 Double-click **`Agape Aftershot.cmd`**, or:
 
@@ -126,12 +135,69 @@ cull.cmd app
 Your browser opens at `http://localhost:8765`. Leave the console window open
 while you use it. Press the green **+** to start.
 
+### macOS (iMac, MacBook, Mac mini, Mac Studio)
+
+**1. Install Python 3.12.** With [Homebrew](https://brew.sh):
+
+```bash
+brew install python@3.12
+```
+
+or download it from [python.org](https://www.python.org/downloads/macos/).
+
+**2. Get the code**
+
+```bash
+git clone https://github.com/agapestudionyc/agape-aftershot.git
+```
+
+(Or **Code → Download ZIP** on GitHub.)
+
+**3. Run setup, once.** In Finder, double-click **`setup.command`** inside the
+folder. The first time, macOS may refuse because the file came from the
+internet: right-click it, choose **Open**, then **Open** again. From Terminal
+it is:
+
+```bash
+cd agape-aftershot && bash setup.command
+```
+
+It creates a private Python environment in `~/.cullkit/venv` and downloads the
+libraries. If it stops with a message about a compiler, install Apple's
+command-line tools and run it again:
+
+```bash
+xcode-select --install
+```
+
+**4. Tell it where your photographs live**
+
+```bash
+./cull config --archive-root "/Volumes/Photos/Archive" --work-root "/Volumes/Photos/Current"
+```
+
+**5. Start it.** Double-click **`Agape Aftershot.command`**. Your browser opens
+at `http://localhost:8765`. Keep the Terminal window open while you use it.
+
+**What is different on a Mac**
+
+- Drives are the startup disk plus whatever is mounted under `/Volumes`. A
+  camera card is recognised by its `DCIM` folder.
+- Deleting in Files puts things in the **Trash** through Finder. The first
+  time, macOS asks whether Terminal may control Finder; say yes, or files are
+  moved into the Trash folder directly instead.
+- The first time it reads an external drive, the Desktop or Documents, macOS
+  asks for permission. If a folder shows as empty that should not be, give
+  Terminal access in **System Settings → Privacy & Security → Files and Folders**.
+- The Mac is kept awake while a job runs (`caffeinate`) and released after.
+- It does not start by itself at login yet.
+
 ### Optional extras
 
-| for | install |
-|---|---|
-| Playing video/audio formats the browser cannot (`.mkv`, `.avi`, `.wma`…), video thumbnails, and converting music you add to a vibe | `winget install Gyan.FFmpeg` |
-| Searching YouTube Music from the Vibes panel | `"%USERPROFILE%\.cullkit\venv\Scripts\pip.exe" install ytmusicapi` |
+| for | Windows | macOS |
+|---|---|---|
+| Playing video/audio the browser cannot (`.mkv`, `.avi`, `.wma`…), video thumbnails, converting music you add to a vibe | `winget install Gyan.FFmpeg` | `brew install ffmpeg` |
+| Searching YouTube Music from the Vibes panel | `"%USERPROFILE%\.cullkit\venv\Scripts\pip.exe" install ytmusicapi` | `~/.cullkit/venv/bin/pip install ytmusicapi` |
 
 ---
 
@@ -148,7 +214,8 @@ own devices is [Tailscale](https://tailscale.com):
 
 1. Install Tailscale on the PC and the phone, signed in to the same account.
 2. In the Tailscale admin console, enable **HTTPS Certificates** (DNS page).
-3. On the PC:
+3. On the computer (on a Mac, the command is inside the app:
+   `/Applications/Tailscale.app/Contents/MacOS/Tailscale`):
 
    ```bash
    tailscale serve --bg --https=443 http://127.0.0.1:8765
@@ -194,7 +261,8 @@ Every command is a dry run until you add `--apply`.
 
 ## For developers
 
-- `cullkit/` — the Python package. `server.py` is the web server and session;
+- `cullkit/` — the Python package. `plat.py` holds everything that differs
+  between Windows and macOS; `server.py` is the web server and session;
   `cli.py` the commands; `files.py` the explorer; `quality.py`, `faces.py`,
   `scan.py`, `poses.py` the judging.
 - `cullkit/web/` — the interface: `index.html`, plus `files.js` / `files.css`.
@@ -204,6 +272,8 @@ Every command is a dry run until you add `--apply`.
   ```bash
   "%USERPROFILE%\.cullkit\venv\Scripts\python.exe" -m unittest discover -s tests
   ```
+
+  On a Mac: `PYTHONPATH=. ~/.cullkit/venv/bin/python -m unittest discover -s tests`
 
 Defaults such as the similarity and blur thresholds were calibrated on one
 photographer's frames. Expect to tune them for your own.
@@ -219,5 +289,5 @@ welcome - open an [issue](https://github.com/agapestudionyc/agape-aftershot/issu
 
 This is one photographer's working tool, shared as it is. It is used daily on
 one Windows machine and has a test suite, but it has not been run on many
-setups. Back up your cards until you trust it — and it is built so that you can:
+setups, and the macOS version has not been run on a Mac at all yet. Back up your cards until you trust it — and it is built so that you can:
 it never formats, deletes or overwrites anything.

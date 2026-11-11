@@ -11,8 +11,11 @@ send back what you improve.
   Open an issue and include the camera, the file type and what you saw.
 - **Fix or add something.** Fork the repository, make the change on a branch,
   and open a pull request that says what it does and why.
-- **macOS and Linux.** The drive listing and the launchers are Windows-only.
-  This is the most useful larger piece of work waiting to be done.
+- **Try it on a Mac.** The macOS support in `cullkit/plat.py` and the
+  `.command` launchers were written without a Mac to run them on. The single
+  most useful thing anyone can do right now is install it on one and report
+  what happens - or fix what does not.
+- **Linux.** Not supported. `plat.py` is where it would go.
 
 ## Before you send a change
 

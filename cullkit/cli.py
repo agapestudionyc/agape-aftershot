@@ -479,7 +479,7 @@ def cmd_drives(args):
     for v in vols:
         tag = "  <- looks like a camera card" if (v.dcim and v.kind == "removable") else ""
         media = f"{v.media:>6} photos" if not args.fast else "           "
-        echo(f"  {v.letter}:  {v.label or '(no label)':<18} {v.kind:<10} "
+        echo(f"  {v.tag:<4} {v.label or '(no label)':<18} {v.kind:<10} "
              f"{report.human(v.used):>9} used of {report.human(v.total):<9} "
              f"{media}{tag}")
     if not vols:
@@ -829,7 +829,8 @@ def _discard_root(folder, cfg):
     """`_DESCARTABLES` at the top of the shoot's own drive, unless set."""
     if cfg.get("discard_root"):
         return Path(cfg["discard_root"])
-    return Path(Path(folder).resolve().anchor) / "_DESCARTABLES"
+    from . import plat
+    return plat.drive_top(folder) / "_DESCARTABLES"
 
 
 def _discard_target(folder, dest, args, cfg):
@@ -852,7 +853,8 @@ def _discard_target(folder, dest, args, cfg):
         return None, f"it is already in {root}"
     # A rename on one drive is instant and cannot half-happen. Across drives
     # it would be a copy and a delete of a whole shoot, which is not this job.
-    if folder.anchor.lower() != root.resolve().anchor.lower():
+    from . import plat
+    if not plat.same_drive(folder, root):
         return None, f"{root} is on another drive"
     return actions._unique(root / folder.name), None
 

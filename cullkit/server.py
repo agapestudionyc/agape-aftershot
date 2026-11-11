@@ -1548,23 +1548,18 @@ class Handler(BaseHTTPRequestHandler):
             if size:
                 folders += 1
                 total += size
-                drives.add(Path(c).anchor)
+                drives.add(__import__("cullkit.plat", fromlist=["x"]).mount_of(c))
 
         gb = total / (1024 ** 3)
         level = "high" if gb >= warn_gb * 2.5 else ("warn" if gb >= warn_gb else "ok")
 
         # A full disk is the real problem; a big cache on a roomy drive is not.
         tight = []
+        from . import plat
         for d in drives:
-            try:
-                free = ctypes.c_ulonglong(0)
-                tot = ctypes.c_ulonglong(0)
-                ctypes.windll.kernel32.GetDiskFreeSpaceExW(
-                    d, ctypes.byref(free), ctypes.byref(tot), None)
-                if tot.value and free.value / tot.value < 0.10:
-                    tight.append(d)
-            except Exception:
-                pass
+            tot, free = plat.disk_usage(d)
+            if tot and free / tot < 0.10:
+                tight.append(d)
         if tight:
             level = "high"
 
@@ -1683,7 +1678,7 @@ class Handler(BaseHTTPRequestHandler):
             vols = []
             for v in I.list_volumes(count_media=False):
                 vols.append({
-                    "letter": v.letter, "label": v.label, "kind": v.kind,
+                    "letter": v.letter, "tag": v.tag, "label": v.label, "kind": v.kind,
                     "total": v.total, "free": v.free, "used": v.used,
                     "card": bool(v.dcim and v.kind == "removable"),
                     "path": str(v.path),
@@ -1715,6 +1710,7 @@ class Handler(BaseHTTPRequestHandler):
             # one to end it finds out. Ending it used to be known only to the
             # browser that pressed the button; every other screen carried on
             # showing a run that no longer existed.
+            "sep": os.sep,       # a backslash on Windows, a slash on a Mac
             "run_active": bool(self._read_json(
                 Path.home() / ".cullkit" / "run.json").get("active")),
             # Which darkroom is open, so a page sitting in one that has been
@@ -2394,11 +2390,8 @@ def local_addresses():
 
 def _tailscale_cli():
     """Where the Tailscale command lives, or nothing if it is not installed."""
-    exe = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Tailscale" / "tailscale.exe"
-    if exe.exists():
-        return str(exe)
-    import shutil
-    return shutil.which("tailscale") or ""
+    from . import plat
+    return plat.tailscale_cli()
 
 
 def _ts(*args, timeout=4):
@@ -2648,17 +2641,21 @@ def _wanted_awake():
 
 
 def _keep_awake_loop():
-    if os.name != "nt":
+    from . import plat
+    if not (plat.IS_WIN or plat.IS_MAC):
         return
 
     def loop():
-        k32 = ctypes.windll.kernel32
+        k32 = ctypes.windll.kernel32 if plat.IS_WIN else None
         while True:
             want = _wanted_awake()
             # Re-asserted every pass, not only on a change: the request belongs
             # to this thread, and asking again costs nothing.
-            k32.SetThreadExecutionState(
-                _ES_CONTINUOUS | (_ES_SYSTEM_REQUIRED if want else 0))
+            if k32 is not None:
+                k32.SetThreadExecutionState(
+                    _ES_CONTINUOUS | (_ES_SYSTEM_REQUIRED if want else 0))
+            else:
+                plat.keep_awake(want)
             if want != _awake["on"]:
                 journal.write("awake.hold" if want else "awake.release")
                 _awake["on"] = want
